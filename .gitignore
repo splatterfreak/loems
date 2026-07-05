@@ -1,0 +1,49 @@
+# Android SDK and local machine configuration
+local.properties
+
+# Gradle build output and caches
+.gradle/
+build/
+**/build/
+
+# Android Studio / IntelliJ IDEA
+.idea/
+*.iml
+out/
+
+# Generated Android packages
+*.apk
+*.aab
+*.ap_
+*.aar
+output-metadata.json
+
+# Signing credentials
+*.jks
+*.keystore
+keystore.properties
+
+# Google/Firebase configuration (keep credentials local)
+google-services.json
+
+# Native build output
+.cxx/
+.externalNativeBuild/
+
+# Test, profiling and diagnostic output
+captures/
+*.hprof
+*.log
+test-results/
+
+# Operating-system files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Temporary and editor files
+*.tmp
+*.temp
+*.swp
+*.swo
+*~

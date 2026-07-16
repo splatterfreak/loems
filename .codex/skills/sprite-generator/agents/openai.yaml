@@ -1,0 +1,4 @@
+interface:
+  display_name: "Sprite Generator"
+  short_description: "Generate consistent Loems sprite sheets."
+  default_prompt: "Use $sprite-generator to generate or refine Loems sprite sheets that stay aligned, coherent, transparent, and recolorable."

@@ -6,6 +6,25 @@ import org.junit.Test
 
 class LoemBattleTest {
     @Test
+    fun wartEmperorHasUltraToadBattleStats() {
+        val state = LoemGameState(
+            bornAtMillis = 0,
+            gender = LoemGender.MALE,
+            evolution = 3,
+            evolutionPath = EvolutionPath.MUD_TOAD,
+        )
+
+        val stats = LoemBattle.stats(state, nowMillis = 0, localHour = 12)
+
+        assertEquals(20, stats.baseStrength)
+        assertEquals(22, stats.baseDefense)
+        assertEquals(
+            stats,
+            LoemBattle.stats(state.copy(gender = LoemGender.FEMALE), nowMillis = 0, localHour = 12),
+        )
+    }
+
+    @Test
     fun maleAndFemaleStormkaiserHaveIdenticalBattleStats() {
         val male = LoemGameState(
             bornAtMillis = 0,
@@ -91,7 +110,7 @@ class LoemBattleTest {
         val sausageStats = LoemBattle.stats(sausage, 0, 12)
         val poopStats = LoemBattle.stats(poop, 0, 12)
 
-        assertEquals(4, poopStats.baseStrength)
+        assertEquals(6, poopStats.baseStrength)
         assertEquals(6, poopStats.baseDefense)
         assertTrue(poopStats.strength < sausageStats.strength)
         assertTrue(poopStats.defense < sausageStats.defense)
@@ -112,8 +131,52 @@ class LoemBattleTest {
 
         assertEquals(18, majesticStats.baseStrength)
         assertEquals(15, majesticStats.baseDefense)
-        assertEquals(20, stormkaiserStats.baseStrength)
-        assertEquals(16, stormkaiserStats.baseDefense)
+        assertEquals(22, stormkaiserStats.baseStrength)
+        assertEquals(20, stormkaiserStats.baseDefense)
+    }
+
+    @Test
+    fun gloomWizardHasEqualMagicStatsForBothGenders() {
+        val poop = LoemGameState(
+            bornAtMillis = 0,
+            evolution = 2,
+            evolutionPath = EvolutionPath.BAD,
+        )
+        val male = poop.copy(evolution = 3, gender = LoemGender.MALE)
+        val female = poop.copy(evolution = 3, gender = LoemGender.FEMALE)
+
+        val poopStats = LoemBattle.stats(poop, 0, 12)
+        val maleStats = LoemBattle.stats(male, 0, 12)
+        val femaleStats = LoemBattle.stats(female, 0, 12)
+
+        assertEquals(6, poopStats.baseStrength)
+        assertEquals(6, poopStats.baseDefense)
+        assertEquals(15, maleStats.baseStrength)
+        assertEquals(26, maleStats.baseDefense)
+        assertEquals(maleStats.baseStrength, femaleStats.baseStrength)
+        assertEquals(maleStats.baseDefense, femaleStats.baseDefense)
+    }
+
+    @Test
+    fun armageddonSerpentIsStrongerThanPrunkSerpentForBothGenders() {
+        val serpent = LoemGameState(
+            bornAtMillis = 0,
+            evolution = 2,
+            evolutionPath = EvolutionPath.SERPENT,
+        )
+        val male = serpent.copy(evolution = 3, gender = LoemGender.MALE)
+        val female = serpent.copy(evolution = 3, gender = LoemGender.FEMALE)
+
+        val serpentStats = LoemBattle.stats(serpent, 0, 12)
+        val maleStats = LoemBattle.stats(male, 0, 12)
+        val femaleStats = LoemBattle.stats(female, 0, 12)
+
+        assertEquals(15, serpentStats.baseStrength)
+        assertEquals(18, serpentStats.baseDefense)
+        assertEquals(20, maleStats.baseStrength)
+        assertEquals(24, maleStats.baseDefense)
+        assertEquals(maleStats.baseStrength, femaleStats.baseStrength)
+        assertEquals(maleStats.baseDefense, femaleStats.baseDefense)
     }
 
     @Test
@@ -236,17 +299,22 @@ class LoemBattleTest {
 
         assertEquals(1, winner.battleWins)
         assertEquals(30, winner.battleExperience)
-        assertEquals(76, winner.healthAtLastUpdate)
+        assertEquals(75, winner.healthAtLastUpdate)
         assertEquals(1, loser.battleLosses)
         assertEquals(0, loser.battleExperience)
-        assertEquals(72, loser.healthAtLastUpdate)
+        assertEquals(70, loser.healthAtLastUpdate)
     }
 
     @Test
-    fun defenseOnlyReducesHealthLossByAtMostHalf() {
-        assertEquals(4, LoemBattle.healthLoss(won = false, defense = 25))
-        assertEquals(2, LoemBattle.healthLoss(won = true, defense = 25))
-        assertEquals(4, LoemBattle.healthLoss(won = false, defense = 999))
-        assertEquals(6, LoemBattle.healthLoss(won = false, defense = 12))
+    fun defenseHasDiminishingReturnsAndNeverDropsHealthLossBelowTwo() {
+        assertEquals(0f, LoemBattle.defenseReduction(0), 0.0001f)
+        assertEquals(0.5f, LoemBattle.defenseReduction(30), 0.0001f)
+        assertEquals(33f / 63f, LoemBattle.defenseReduction(33), 0.0001f)
+        assertEquals(5, LoemBattle.healthLoss(won = false, defense = 25))
+        assertEquals(3, LoemBattle.healthLoss(won = true, defense = 25))
+        assertEquals(5, LoemBattle.healthLoss(won = false, defense = 33))
+        assertEquals(2, LoemBattle.healthLoss(won = false, defense = 999))
+        assertEquals(2, LoemBattle.healthLoss(won = true, defense = 999))
+        assertEquals(7, LoemBattle.healthLoss(won = false, defense = 12))
     }
 }

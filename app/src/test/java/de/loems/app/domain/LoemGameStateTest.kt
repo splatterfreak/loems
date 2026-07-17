@@ -183,7 +183,7 @@ class LoemGameStateTest {
     }
 
     @Test
-    fun greenHappinessRecoversOneHealthPerFullHour() {
+    fun greenHappinessRecoversThreeHealthPerFullHour() {
         val state = LoemGameState(
             bornAtMillis = 0,
             happiness = 80,
@@ -195,7 +195,7 @@ class LoemGameStateTest {
 
         val recovered = state.applyNaturalHealthRecovery(3 * 60 * 60 * 1_000L)
 
-        assertEquals(53, recovered.healthAtLastUpdate)
+        assertEquals(59, recovered.healthAtLastUpdate)
     }
 
     @Test
@@ -345,6 +345,45 @@ class LoemGameStateTest {
     }
 
     @Test
+    fun maleAndFemaleMudToadBecomeWartEmperorVariantsInAdultWindow() {
+        val male = LoemGameState(
+            bornAtMillis = 0,
+            gender = LoemGender.MALE,
+            evolution = 2,
+            evolutionPath = EvolutionPath.MUD_TOAD,
+            weightAtLastUpdateGrams = LoemWeightProfile.MUD_TOAD.healthyWeightGrams,
+        )
+        val thresholdMillis =
+            LoemEvolution.nextAdultEvolutionAgeHours(male) * 60 * 60 * 1_000L
+
+        assertFalse(LoemEvolution.canBecomeAdult(male, thresholdMillis - 1))
+        assertTrue(LoemEvolution.canBecomeAdult(male, thresholdMillis))
+        val female = male.copy(gender = LoemGender.FEMALE)
+        assertTrue(LoemEvolution.canBecomeAdult(female, thresholdMillis))
+
+        val evolved = male.evolved(EvolutionPath.MUD_TOAD)
+        assertEquals(3, evolved.evolution)
+        assertEquals(EvolutionPath.MUD_TOAD, evolved.evolutionPath)
+        assertEquals(LoemWeightProfile.WART_EMPEROR, evolved.weightProfile())
+        assertEquals(38_000, evolved.weightAtLastUpdateGrams)
+        assertEquals(
+            "Warzenkaiser-Löm",
+            LoemEvolution.title(evolved.evolution, evolved.evolutionPath, evolved.gender),
+        )
+        val femaleEvolved = female.evolved(EvolutionPath.MUD_TOAD)
+        assertEquals(LoemWeightProfile.WART_EMPEROR, femaleEvolved.weightProfile())
+        assertEquals(38_000, femaleEvolved.weightAtLastUpdateGrams)
+        assertEquals(
+            "Warzenkaiserin-Löm",
+            LoemEvolution.title(
+                femaleEvolved.evolution,
+                femaleEvolved.evolutionPath,
+                femaleEvolved.gender,
+            ),
+        )
+    }
+
+    @Test
     fun evolutionNeverCreatesWeightBelowTheNewFormsMinimum() {
         val underweight = LoemGameState(bornAtMillis = 0, weightAtLastUpdateGrams = 1)
 
@@ -368,6 +407,50 @@ class LoemGameStateTest {
     }
 
     @Test
+    fun maleAndFemaleSerpentBecomeArmageddonVariantsInAdultWindow() {
+        val male = LoemGameState(
+            bornAtMillis = 0,
+            gender = LoemGender.MALE,
+            evolution = 2,
+            evolutionPath = EvolutionPath.SERPENT,
+            weightAtLastUpdateGrams = LoemWeightProfile.SAUSAGE.healthyWeightGrams,
+        )
+        val thresholdMillis =
+            LoemEvolution.nextAdultEvolutionAgeHours(male) * 60 * 60 * 1_000L
+
+        assertFalse(LoemEvolution.canBecomeAdult(male, thresholdMillis - 1))
+        assertTrue(LoemEvolution.canBecomeAdult(male, thresholdMillis))
+        val female = male.copy(gender = LoemGender.FEMALE)
+        assertTrue(LoemEvolution.canBecomeAdult(female, thresholdMillis))
+
+        val evolvedMale = male.evolved(EvolutionPath.SERPENT)
+        assertEquals(3, evolvedMale.evolution)
+        assertEquals(EvolutionPath.SERPENT, evolvedMale.evolutionPath)
+        assertEquals(LoemWeightProfile.ARMAGEDDON_SERPENT, evolvedMale.weightProfile())
+        assertEquals(42_000, evolvedMale.weightAtLastUpdateGrams)
+        assertEquals(
+            "Armageddon-Prunkschlangenkaiser-Löm",
+            LoemEvolution.title(
+                evolvedMale.evolution,
+                evolvedMale.evolutionPath,
+                evolvedMale.gender,
+            ),
+        )
+
+        val evolvedFemale = female.evolved(EvolutionPath.SERPENT)
+        assertEquals(LoemWeightProfile.ARMAGEDDON_SERPENT, evolvedFemale.weightProfile())
+        assertEquals(42_000, evolvedFemale.weightAtLastUpdateGrams)
+        assertEquals(
+            "Armageddon-Prunkschlangenkaiserin-Löm",
+            LoemEvolution.title(
+                evolvedFemale.evolution,
+                evolvedFemale.evolutionPath,
+                evolvedFemale.gender,
+            ),
+        )
+    }
+
+    @Test
     fun badEvolutionFromSausageCreatesGiantPoopForm() {
         val sausage = LoemGameState(bornAtMillis = 0, weightAtLastUpdateGrams = 5_000)
             .evolved(EvolutionPath.BAD)
@@ -379,6 +462,50 @@ class LoemGameStateTest {
         assertEquals("Haufen-Löm", LoemEvolution.title(poop.evolution, poop.evolutionPath))
         assertEquals(LoemWeightProfile.POOP, poop.weightProfile())
         assertEquals(25_000, poop.weightAtLastUpdateGrams)
+    }
+
+    @Test
+    fun maleAndFemalePoopBecomeGloomWizardVariantsInAdultWindow() {
+        val male = LoemGameState(
+            bornAtMillis = 0,
+            gender = LoemGender.MALE,
+            evolution = 2,
+            evolutionPath = EvolutionPath.BAD,
+            weightAtLastUpdateGrams = LoemWeightProfile.POOP.healthyWeightGrams,
+        )
+        val thresholdMillis =
+            LoemEvolution.nextAdultEvolutionAgeHours(male) * 60 * 60 * 1_000L
+
+        assertFalse(LoemEvolution.canBecomeAdult(male, thresholdMillis - 1))
+        assertTrue(LoemEvolution.canBecomeAdult(male, thresholdMillis))
+        val female = male.copy(gender = LoemGender.FEMALE)
+        assertTrue(LoemEvolution.canBecomeAdult(female, thresholdMillis))
+
+        val evolvedMale = male.evolved(EvolutionPath.BAD)
+        assertEquals(3, evolvedMale.evolution)
+        assertEquals(EvolutionPath.BAD, evolvedMale.evolutionPath)
+        assertEquals(LoemWeightProfile.GLOOM_WIZARD, evolvedMale.weightProfile())
+        assertEquals(32_000, evolvedMale.weightAtLastUpdateGrams)
+        assertEquals(
+            "Trübsal-Zauberhaufen-Löm",
+            LoemEvolution.title(
+                evolvedMale.evolution,
+                evolvedMale.evolutionPath,
+                evolvedMale.gender,
+            ),
+        )
+
+        val evolvedFemale = female.evolved(EvolutionPath.BAD)
+        assertEquals(LoemWeightProfile.GLOOM_WIZARD, evolvedFemale.weightProfile())
+        assertEquals(32_000, evolvedFemale.weightAtLastUpdateGrams)
+        assertEquals(
+            "Trübsal-Zauberhaufen-Lömin",
+            LoemEvolution.title(
+                evolvedFemale.evolution,
+                evolvedFemale.evolutionPath,
+                evolvedFemale.gender,
+            ),
+        )
     }
 
     @Test
@@ -433,12 +560,27 @@ class LoemGameStateTest {
             localHour = 22,
         )
 
-        assertEquals(83, recovered.healthAtLastUpdate)
+        assertEquals(86, recovered.healthAtLastUpdate)
         assertEquals(0L, recovered.lightOnDuringSleepSinceMillis)
     }
 
     @Test
-    fun sleepTeddyAddsTenToFifteenPercentHealingWithoutRoundingItAway() {
+    fun switchingLightOffStartsHealingImmediatelyEvenWithoutAnotherWorldRefresh() {
+        val hour = 60 * 60 * 1_000L
+        val start = HATCH_DURATION_MILLIS
+        val switchedOff = LoemGameState(
+            bornAtMillis = 0,
+            healthAtLastUpdate = 80,
+        ).withLightOff(off = true, nowMillis = start, localHour = 22)
+
+        val recovered = switchedOff.applySleepLightPenalty(start + 3 * hour, localHour = 22)
+
+        assertEquals(start, switchedOff.lightOffDuringSleepSinceMillis)
+        assertEquals(86, recovered.healthAtLastUpdate)
+    }
+
+    @Test
+    fun sleepTeddyAddsSeventyFiveToHundredPercentHealingWithoutRoundingItAway() {
         val hour = 60 * 60 * 1_000L
         val start = HATCH_DURATION_MILLIS
         var state = LoemGameState(
@@ -447,27 +589,30 @@ class LoemGameStateTest {
             lightOff = true,
             lightOffDuringSleepSinceMillis = start,
             teddyPlacedForSleep = true,
-            teddyHealingBonusPercent = 15,
+            teddyHealingBonusPercent = 75,
         )
 
-        repeat(7) { index ->
+        repeat(3) { index ->
             state = state.applySleepLightPenalty(start + (index + 1) * hour, localHour = 22)
         }
 
-        assertEquals(88, state.healthAtLastUpdate)
-        assertEquals(5, state.sleepHealingRemainderPercent)
+        assertEquals(90, state.healthAtLastUpdate)
+        assertEquals(50, state.sleepHealingRemainderPercent)
     }
 
     @Test
     fun teddyCanOnlyBePlacedWhileSleepingAndResetsAfterSleep() {
         val now = HATCH_DURATION_MILLIS
         val awake = LoemGameState(bornAtMillis = 0)
-        val rejected = awake.placedSleepTeddy(localHour = 12, nowMillis = now, bonusPercent = 15)
-        val accepted = awake.placedSleepTeddy(localHour = 22, nowMillis = now, bonusPercent = 15)
+        val rejected = awake.placedSleepTeddy(localHour = 12, nowMillis = now, bonusPercent = 101)
+        val accepted = awake.placedSleepTeddy(localHour = 22, nowMillis = now, bonusPercent = 101)
+        val minimum = awake.placedSleepTeddy(localHour = 22, nowMillis = now, bonusPercent = 0)
         val morning = accepted.applySleepLightPenalty(now + 1_000, localHour = 8)
 
         assertFalse(rejected.teddyPlacedForSleep)
         assertTrue(accepted.teddyPlacedForSleep)
+        assertEquals(100, accepted.teddyHealingBonusPercent)
+        assertEquals(75, minimum.teddyHealingBonusPercent)
         assertFalse(morning.teddyPlacedForSleep)
         assertEquals(0, morning.teddyHealingBonusPercent)
     }
@@ -527,5 +672,31 @@ class LoemGameStateTest {
 
         assertEquals(EvolutionPath.GOOD, LoemEvolution.chooseFromCare(good, 0, 12))
         assertEquals(EvolutionPath.BAD, LoemEvolution.chooseFromCare(bad, 0, 12))
+    }
+
+    @Test
+    fun firstEvolutionTimeIsStableAndInsideThe72To96HourWindow() {
+        val hourMillis = 60 * 60 * 1_000L
+        val states = (0L..48L).map { hour -> LoemGameState(bornAtMillis = hour * hourMillis) }
+        val thresholds = states.map(LoemEvolution::firstEvolutionAgeMillis)
+
+        thresholds.forEach { threshold ->
+            assertTrue(threshold >= 72L * hourMillis)
+            assertTrue(threshold <= 96L * hourMillis)
+        }
+        assertEquals(thresholds.first(), LoemEvolution.firstEvolutionAgeMillis(states.first()))
+        assertTrue(thresholds.distinct().size > 1)
+    }
+
+    @Test
+    fun poorlyCaredForWingedLoemBecomesMudToadInsteadOfMajestic() {
+        val mudToad = LoemGameState(bornAtMillis = 0)
+            .evolved(EvolutionPath.GOOD)
+            .evolved(EvolutionPath.BAD)
+
+        assertEquals(2, mudToad.evolution)
+        assertEquals(EvolutionPath.MUD_TOAD, mudToad.evolutionPath)
+        assertEquals(LoemWeightProfile.MUD_TOAD, mudToad.weightProfile())
+        assertEquals("Matschkröten-Löm", LoemEvolution.title(2, EvolutionPath.MUD_TOAD))
     }
 }

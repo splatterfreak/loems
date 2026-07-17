@@ -154,6 +154,12 @@ Spritzen sind nicht stapelbar: Ist beim nächsten Dreitages-Meilenstein bereits 
 bleibt es bei einer Spritze und der Meilenstein gilt dennoch als verarbeitet. Nach dem Verbrauch
 kann daher erst ein späterer Dreitages-Meilenstein wieder eine Spritze vergeben.
 
+In App-Version `7` wird beim ersten Start einmalig eine kostenlose Heilspritze vergeben, sofern
+noch keine Spritze vorhanden ist. Nach der Vergabe erscheint ein einmaliger Hinweis. Ein
+dauerhafter Aktionsmarker verhindert eine erneute Vergabe bei weiteren App-Starts und bleibt
+auch beim Start einer neuen Löm-Generation erhalten. Andere App-Versionen führen diese Aktion
+nicht aus.
+
 Die Spritze erscheint im Fütterungsbildschirm als dritte Auswahl. Nach dem Ziehen auf das Löm
 erklärt ein Bestätigungsdialog, dass sie die Gesundheit vollständig auf `100` setzt und danach
 verbraucht ist. Abbrechen verändert den Spielstand nicht. Bestätigen verbraucht genau eine
@@ -190,7 +196,7 @@ Gesundheit liegt immer zwischen `0` und `100`. Ein herumliegender Kackhaufen kos
 Gesundheitspunkte pro voller schmutziger Stunde.
 
 Solange die Zufriedenheit im grünen Bereich bei mindestens `70` liegt, regeneriert das Löm
-unabhängig vom Schlaf einen Gesundheitspunkt pro voller Stunde. Normales Futter und das
+unabhängig vom Schlaf drei Gesundheitspunkte pro voller Stunde. Normales Futter und das
 Training verändern die Gesundheit nicht; die zeitbasierte Regeneration wird auch nach einem
 Neustart anhand der vergangenen vollen Stunden verrechnet.
 
@@ -242,13 +248,15 @@ Debug-Spielstand gespeicherten erzwungenen Schlafzustand.
 - Licht an in der Nacht gibt `−1` Pflegepunkt.
 - Für jede volle Schlafstunde mit eingeschaltetem Licht verliert das Löm zusätzlich
   `1` Zufriedenheit und `1` Gesundheit.
-- Für jede volle Schlafstunde mit ausgeschaltetem Licht regeneriert das Löm `1` Gesundheit
+- Für jede volle Schlafstunde mit ausgeschaltetem Licht regeneriert das Löm `2` Gesundheit
   (höchstens bis `100`).
+- Beim Ausschalten des Lichts während des Schlafs wird der Beginn der Heilphase sofort
+  gespeichert, damit die verstrichene Zeit auch nach dem Schließen der App angerechnet wird.
 - Während das Löm schläft, kann der wiederverwendbare Schlaf-Teddy vom Icon neben dem
   Lichtschalter auf das Löm gezogen werden. Er schwebt anschließend als separates Overlay über
   jeder Löm-Form; dafür werden keine zusätzlichen Form-Sprites benötigt.
 - Der Teddy erhöht die Heilung bei ausgeschaltetem Licht für diese Schlafphase zufällig um
-  `10–15 %`. Prozentreste werden gespeichert und in späteren Schlafstunden weiterverrechnet,
+  `75–100 %`. Prozentreste werden gespeichert und in späteren Schlafstunden weiterverrechnet,
   damit der Bonus trotz ganzzahlig angezeigter Gesundheit nicht durch Rundung verloren geht.
 - Bei eingeschaltetem Licht gibt der Teddy keine Heilung. Sobald die Schlafphase endet, wird
   seine Platzierung einschließlich des zufälligen Bonus zurückgesetzt und er kann beim nächsten
@@ -416,9 +424,13 @@ Die technische Evolutionsstufe ist auf `3` begrenzt.
 | Flügel-Löm | 12 | 9 |
 | Wurst-Löm | 8 | 14 |
 | Majestätisches Flügel-Löm | 18 | 15 |
-| Sturmkaiser-Löm | 20 | 16 |
+| Matschkröten-Löm | 10 | 13 |
 | Prunkschlangen-Löm | 15 | 18 |
-| Haufen-Löm | 4 | 6 |
+| Haufen-Löm | 6 | 6 |
+| Sturmkaiser-Löm / Sturmkaiserin-Löm | 22 | 20 |
+| Warzenkaiser-Löm / Warzenkaiserin-Löm | 20 | 22 |
+| Armageddon-Prunkschlangenkaiser-Löm / -kaiserin-Löm | 20 | 24 |
+| Trübsal-Zauberhaufen-Löm / -Lömin | 15 | 26 |
 
 ### Pflegefaktor
 
@@ -521,18 +533,22 @@ Ein gleich starker Gegner gibt somit `20 EP`, ein 50 Prozent stärkerer etwa `30
 Verlierer erhält keine EP.
 
 Verteidigung beeinflusst ausschließlich den Gesundheitsverlust nach dem Kampf. Der
-Grundverlust beträgt beim Verlierer `8` und beim Gewinner `4`. Jeder Verteidigungspunkt senkt
-diesen Verlust um zwei Prozentpunkte; die Reduktion ist auf 50 Prozent begrenzt:
+Grundverlust beträgt beim Verlierer `10` und beim Gewinner `5`. Verteidigung reduziert diesen
+Verlust mit abnehmendem Grenznutzen. Die Skalierungskonstante `30` sorgt dafür, dass
+`30` Verteidigung genau `50 %` und `33` Verteidigung rund `52,4 %` Reduktion ergeben. Es gibt
+keinen harten Reduktionsdeckel; unabhängig von Verteidigung und Rundung verliert ein Löm pro
+Kampf aber immer mindestens `2` Gesundheit:
 
 ```text
-Verteidigungsreduktion = min(Verteidigung × 0,02; 0,50)
-Gesundheitsverlust = round(Grundverlust × (1 − Verteidigungsreduktion))
+Verteidigungsreduktion = Verteidigung / (Verteidigung + 30)
+Gesundheitsverlust = max(2; round(Grundverlust × (1 − Verteidigungsreduktion)))
 ```
 
 Die vorhandenen Verteidigungswerte liegen je nach Form, Pflege und Level typischerweise etwa
-zwischen 9 und 26. Dadurch sind schon 18 bis 36 Prozent Reduktion im normalen Bereich spürbar,
-während 25 Verteidigung das Maximum erreicht. Der Gewinner verliert somit mindestens `2`, der
-Verlierer mindestens `4` Gesundheit. Gesundheit bleibt auf `0–100` begrenzt.
+zwischen 9 und 26. Das entspricht rund 23 bis 46 Prozent Reduktion. Weitere Verteidigung bleibt
+auch oberhalb von `33` wirksam, bringt jedoch zunehmend kleinere Verbesserungen. Durch die feste
+Untergrenze beträgt der Gesundheitsverlust bei Sieg und Niederlage immer mindestens `2`.
+Gesundheit bleibt auf `0–100` begrenzt.
 
 Im Status stehen Kampf-Level und EP-Fortschritt des aktuellen Levels als `vorhanden / benötigt`,
 die Gewinnquote sowie direkt darunter die absolute Zahl gewonnener und verlorener Kämpfe.

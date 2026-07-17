@@ -2,7 +2,8 @@ package de.loems.app.domain
 
 const val HATCH_DURATION_MILLIS = 5 * 60 * 1_000L
 const val EVOLUTION_COUNT = 4
-const val EVOLUTION_AGE_HOURS = 72L
+const val FIRST_EVOLUTION_MIN_AGE_HOURS = 72L
+const val FIRST_EVOLUTION_WINDOW_HOURS = 24L
 const val MAJESTIC_EVOLUTION_MIN_AGE_HOURS = 5 * 24L
 const val MAJESTIC_EVOLUTION_WINDOW_HOURS = 2 * 24L
 const val ADULT_EVOLUTION_MIN_AGE_HOURS = 14 * 24L
@@ -25,7 +26,10 @@ const val WAKE_HAPPINESS_LOSS = 5
 const val WAKE_HEALTH_LOSS = 3
 const val LIGHT_ON_SLEEP_HAPPINESS_LOSS_PER_HOUR = 1
 const val LIGHT_ON_SLEEP_HEALTH_LOSS_PER_HOUR = 1
-const val LIGHT_OFF_SLEEP_HEALTH_GAIN_PER_HOUR = 1
+const val NATURAL_HEALTH_GAIN_PER_GREEN_HOUR = 3
+const val LIGHT_OFF_SLEEP_HEALTH_GAIN_PER_HOUR = 2
+const val SLEEP_TEDDY_MIN_HEALING_BONUS_PERCENT = 75
+const val SLEEP_TEDDY_MAX_HEALING_BONUS_PERCENT = 100
 const val POOR_CONDITION_GRACE_HOURS = 2L
 const val POOR_CONDITION_HEALTH_LOSS_PER_HOUR = 1
 const val UNHAPPY_HEALTH_THRESHOLD = 40
@@ -54,6 +58,7 @@ enum class EvolutionPath(val displayName: String) {
     GOOD("Gute Evolution"),
     BAD("Schlechte Evolution"),
     SERPENT("Prunkschlangen-Evolution"),
+    MUD_TOAD("Matschkröten-Evolution"),
 }
 
 enum class LoemGender(val displayName: String, val symbol: String) {
@@ -197,7 +202,9 @@ data class LoemGameState(
             }
         }
         return copy(
-            healthAtLastUpdate = (currentHealth(nowMillis) + greenHours).coerceAtMost(100),
+            healthAtLastUpdate = (
+                currentHealth(nowMillis) + greenHours * NATURAL_HEALTH_GAIN_PER_GREEN_HOUR
+            ).coerceAtMost(100),
             lastHealthUpdateMillis = nowMillis,
             lastNaturalHealthRecoveryMillis = recoveryStart + fullHours * HOUR_MILLIS,
         )
@@ -327,7 +334,14 @@ data class LoemGameState(
                 ((nowMillis - lightOffDuringSleepSinceMillis).coerceAtLeast(0) / (60 * 60 * 1_000L)).toInt()
             if (fullHours == 0) return this
             val currentHealth = currentHealth(nowMillis)
-            val bonusPercent = if (teddyPlacedForSleep) teddyHealingBonusPercent.coerceIn(10, 15) else 0
+            val bonusPercent = if (teddyPlacedForSleep) {
+                teddyHealingBonusPercent.coerceIn(
+                    SLEEP_TEDDY_MIN_HEALING_BONUS_PERCENT,
+                    SLEEP_TEDDY_MAX_HEALING_BONUS_PERCENT,
+                )
+            } else {
+                0
+            }
             val healingHundredths =
                 sleepHealingRemainderPercent +
                     fullHours * LIGHT_OFF_SLEEP_HEALTH_GAIN_PER_HOUR * (100 + bonusPercent)
@@ -372,9 +386,24 @@ data class LoemGameState(
         if (!isSleeping(nowMillis, localHour)) return this
         return copy(
             teddyPlacedForSleep = true,
-            teddyHealingBonusPercent = bonusPercent.coerceIn(10, 15),
+            teddyHealingBonusPercent = bonusPercent.coerceIn(
+                SLEEP_TEDDY_MIN_HEALING_BONUS_PERCENT,
+                SLEEP_TEDDY_MAX_HEALING_BONUS_PERCENT,
+            ),
         )
     }
+
+    fun withLightOff(off: Boolean, nowMillis: Long, localHour: Int): LoemGameState =
+        copy(
+            lightOff = off,
+            lightOnDuringSleepSinceMillis = if (off) 0L else lightOnDuringSleepSinceMillis,
+            lightOffDuringSleepSinceMillis = when {
+                !off -> 0L
+                lightOffDuringSleepSinceMillis != 0L -> lightOffDuringSleepSinceMillis
+                isSleeping(nowMillis, localHour) -> nowMillis
+                else -> 0L
+            },
+        )
 
     fun applyProlongedPoorConditionHealthLoss(nowMillis: Long): LoemGameState {
         val vitals = vitals(nowMillis)
@@ -457,6 +486,13 @@ data class LoemGameState(
         evolution == 0 -> LoemWeightProfile.YOUNG
         evolution >= 3 && evolutionPath == EvolutionPath.GOOD ->
             LoemWeightProfile.STORMKAISER
+        evolution >= 3 &&
+            evolutionPath == EvolutionPath.MUD_TOAD -> LoemWeightProfile.WART_EMPEROR
+        evolution >= 3 && evolutionPath == EvolutionPath.SERPENT ->
+            LoemWeightProfile.ARMAGEDDON_SERPENT
+        evolution >= 3 && evolutionPath == EvolutionPath.BAD ->
+            LoemWeightProfile.GLOOM_WIZARD
+        evolution >= 2 && evolutionPath == EvolutionPath.MUD_TOAD -> LoemWeightProfile.MUD_TOAD
         evolution >= 2 && evolutionPath == EvolutionPath.GOOD -> LoemWeightProfile.MAJESTIC
         evolution >= 2 && evolutionPath == EvolutionPath.BAD -> LoemWeightProfile.POOP
         evolutionPath == EvolutionPath.GOOD -> LoemWeightProfile.WINGED
@@ -470,12 +506,22 @@ data class LoemGameState(
             evolutionPath == EvolutionPath.BAD &&
                 path == EvolutionPath.GOOD &&
                 newEvolution >= 2 -> EvolutionPath.SERPENT
+            evolutionPath == EvolutionPath.GOOD &&
+                path == EvolutionPath.BAD &&
+                newEvolution >= 2 -> EvolutionPath.MUD_TOAD
             else -> path
         }
         val newProfile = when {
             resolvedPath == EvolutionPath.GOOD &&
                 newEvolution >= 3 -> LoemWeightProfile.STORMKAISER
+            resolvedPath == EvolutionPath.MUD_TOAD &&
+                newEvolution >= 3 -> LoemWeightProfile.WART_EMPEROR
+            resolvedPath == EvolutionPath.SERPENT &&
+                newEvolution >= 3 -> LoemWeightProfile.ARMAGEDDON_SERPENT
+            resolvedPath == EvolutionPath.BAD &&
+                newEvolution >= 3 -> LoemWeightProfile.GLOOM_WIZARD
             resolvedPath == EvolutionPath.GOOD && newEvolution >= 2 -> LoemWeightProfile.MAJESTIC
+            resolvedPath == EvolutionPath.MUD_TOAD && newEvolution >= 2 -> LoemWeightProfile.MUD_TOAD
             resolvedPath == EvolutionPath.BAD && newEvolution >= 2 -> LoemWeightProfile.POOP
             resolvedPath == EvolutionPath.GOOD -> LoemWeightProfile.WINGED
             else -> LoemWeightProfile.SAUSAGE
@@ -503,8 +549,12 @@ enum class LoemWeightProfile(
     WINGED(15_000),
     MAJESTIC(20_000),
     STORMKAISER(30_000),
+    WART_EMPEROR(38_000),
+    ARMAGEDDON_SERPENT(42_000),
+    GLOOM_WIZARD(32_000),
     SAUSAGE(10_000),
-    POOP(25_000);
+    POOP(25_000),
+    MUD_TOAD(22_000);
 
     val minimumWeightGrams: Int get() = healthyWeightGrams / 2
     val maximumWeightGrams: Int get() = healthyWeightGrams * 3
@@ -554,6 +604,16 @@ object LoemEvolution {
     fun chooseFromCare(state: LoemGameState, nowMillis: Long, localHour: Int): EvolutionPath =
         if (state.careAverage(nowMillis, localHour) >= 1f) EvolutionPath.GOOD else EvolutionPath.BAD
 
+    fun firstEvolutionAgeMillis(state: LoemGameState): Long {
+        val windowMillis = FIRST_EVOLUTION_WINDOW_HOURS * HOUR_MILLIS
+        val mixedBirthTime =
+            state.bornAtMillis xor
+                (state.bornAtMillis ushr 33) xor
+                -7046029254386353131L
+        val deterministicRandomOffset = Math.floorMod(mixedBirthTime, windowMillis + 1L)
+        return FIRST_EVOLUTION_MIN_AGE_HOURS * HOUR_MILLIS + deterministicRandomOffset
+    }
+
     fun title(
         evolution: Int,
         path: EvolutionPath = EvolutionPath.UNDECIDED,
@@ -562,7 +622,22 @@ object LoemEvolution {
         evolution == 0 -> "Junges Löm"
         evolution >= 3 && path == EvolutionPath.GOOD ->
             if (gender == LoemGender.FEMALE) "Sturmkaiserin-Löm" else "Sturmkaiser-Löm"
+        evolution >= 3 && path == EvolutionPath.MUD_TOAD ->
+            if (gender == LoemGender.FEMALE) "Warzenkaiserin-Löm" else "Warzenkaiser-Löm"
+        evolution >= 3 && path == EvolutionPath.SERPENT ->
+            if (gender == LoemGender.FEMALE) {
+                "Armageddon-Prunkschlangenkaiserin-Löm"
+            } else {
+                "Armageddon-Prunkschlangenkaiser-Löm"
+            }
+        evolution >= 3 && path == EvolutionPath.BAD ->
+            if (gender == LoemGender.FEMALE) {
+                "Trübsal-Zauberhaufen-Lömin"
+            } else {
+                "Trübsal-Zauberhaufen-Löm"
+            }
         evolution >= 2 && path == EvolutionPath.SERPENT -> "Prunkschlangen-Löm"
+        evolution >= 2 && path == EvolutionPath.MUD_TOAD -> "Matschkröten-Löm"
         evolution >= 2 && path == EvolutionPath.GOOD -> "Majestätischer Flügel-Löm"
         evolution >= 2 && path == EvolutionPath.BAD -> "Haufen-Löm"
         path == EvolutionPath.GOOD -> "Flügel-Löm"
@@ -592,7 +667,12 @@ object LoemEvolution {
 
     fun canBecomeAdult(state: LoemGameState, nowMillis: Long): Boolean =
         state.evolution == 2 &&
-            state.evolutionPath == EvolutionPath.GOOD &&
+            (
+                state.evolutionPath == EvolutionPath.GOOD ||
+                    state.evolutionPath == EvolutionPath.MUD_TOAD ||
+                    state.evolutionPath == EvolutionPath.SERPENT ||
+                    state.evolutionPath == EvolutionPath.BAD
+            ) &&
             state.ageHours(nowMillis) >= nextAdultEvolutionAgeHours(state)
 }
 

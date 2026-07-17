@@ -19,7 +19,7 @@ import androidx.work.WorkerParameters
 import de.loems.app.MainActivity
 import de.loems.app.R
 import de.loems.app.data.LoemGameRepository
-import de.loems.app.domain.EVOLUTION_AGE_HOURS
+import de.loems.app.domain.FIRST_EVOLUTION_MIN_AGE_HOURS
 import de.loems.app.domain.HUNGRY_EXPRESSION_THRESHOLD
 import de.loems.app.domain.LoemEvolution
 import java.time.LocalDate
@@ -71,7 +71,10 @@ class LoemNotificationWorker(
                 }.",
             )
             editor.putInt(KEY_EVOLUTION, state.evolution)
-        } else if (!state.evolutionNotificationsEnabled || state.ageHours(now) < EVOLUTION_AGE_HOURS) {
+        } else if (
+            !state.evolutionNotificationsEnabled ||
+            state.ageHours(now) < FIRST_EVOLUTION_MIN_AGE_HOURS
+        ) {
             editor.putInt(KEY_EVOLUTION, state.evolution)
         }
 

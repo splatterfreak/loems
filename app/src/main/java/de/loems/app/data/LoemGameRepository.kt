@@ -10,7 +10,6 @@ import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import de.loems.app.BuildConfig
-import de.loems.app.domain.EVOLUTION_AGE_HOURS
 import de.loems.app.domain.EvolutionPath
 import de.loems.app.domain.FoodType
 import de.loems.app.domain.INITIAL_HAPPINESS
@@ -28,6 +27,8 @@ import de.loems.app.domain.TRAINING_BONUS_WINDOW_MILLIS
 import de.loems.app.domain.LoemBattle
 import de.loems.app.domain.LoemBattleResult
 import de.loems.app.domain.PendingLoemBattle
+import de.loems.app.domain.SLEEP_TEDDY_MAX_HEALING_BONUS_PERCENT
+import de.loems.app.domain.SLEEP_TEDDY_MIN_HEALING_BONUS_PERCENT
 import de.loems.app.domain.ThemeMode
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
@@ -37,6 +38,23 @@ import kotlin.random.Random
 
 private val Context.loemDataStore by preferencesDataStore(name = "loem_game")
 private const val HOUR_MILLIS = 60 * 60 * 1_000L
+
+internal data class Version7FreeSyringeDecision(
+    val markProcessed: Boolean,
+    val grantSyringe: Boolean,
+)
+
+internal fun version7FreeSyringeDecision(
+    versionCode: Int,
+    alreadyProcessed: Boolean,
+    hasHealingSyringe: Boolean,
+): Version7FreeSyringeDecision {
+    val markProcessed = versionCode == 7 && !alreadyProcessed
+    return Version7FreeSyringeDecision(
+        markProcessed = markProcessed,
+        grantSyringe = markProcessed && !hasHealingSyringe,
+    )
+}
 
 class LoemGameRepository(private val context: Context) {
     private object Keys {
@@ -51,6 +69,9 @@ class LoemGameRepository(private val context: Context) {
         val generation = intPreferencesKey("generation")
         val hasHealingSyringe = booleanPreferencesKey("has_healing_syringe")
         val syringeAgeMilestonesProcessed = intPreferencesKey("syringe_age_milestones_processed")
+        val version7FreeSyringeProcessed = booleanPreferencesKey("version_7_free_syringe_processed")
+        val version7FreeSyringeNoticePending =
+            booleanPreferencesKey("version_7_free_syringe_notice_pending")
         val meals = intPreferencesKey("meals")
         val hamMeals = intPreferencesKey("ham_meals")
         val melonMeals = intPreferencesKey("melon_meals")
@@ -108,6 +129,11 @@ class LoemGameRepository(private val context: Context) {
     val gameState: Flow<LoemGameState> = context.loemDataStore.data.map { values ->
         readState(values, System.currentTimeMillis())
     }
+
+    val version7FreeSyringeNoticePending: Flow<Boolean> =
+        context.loemDataStore.data.map { values ->
+            values[Keys.version7FreeSyringeNoticePending] ?: false
+        }
 
     suspend fun currentState(nowMillis: Long = System.currentTimeMillis()): LoemGameState =
         context.loemDataStore.data.map { values -> readState(values, nowMillis) }.first()
@@ -316,6 +342,24 @@ class LoemGameRepository(private val context: Context) {
             if (values[Keys.gender] == null) values[Keys.gender] = LoemGender.entries.random().ordinal
             if (values[Keys.element] == null) values[Keys.element] = LoemElement.entries.random().ordinal
             if (values[Keys.nextPoopAt] == null) values[Keys.nextPoopAt] = nowMillis + randomPoopDelay()
+            val version7Gift = version7FreeSyringeDecision(
+                versionCode = BuildConfig.VERSION_CODE,
+                alreadyProcessed = values[Keys.version7FreeSyringeProcessed] == true,
+                hasHealingSyringe = values[Keys.hasHealingSyringe] == true,
+            )
+            if (version7Gift.markProcessed) {
+                values[Keys.version7FreeSyringeProcessed] = true
+                if (version7Gift.grantSyringe) {
+                    values[Keys.hasHealingSyringe] = true
+                    values[Keys.version7FreeSyringeNoticePending] = true
+                }
+            }
+        }
+    }
+
+    suspend fun dismissVersion7FreeSyringeNotice() {
+        context.loemDataStore.edit { values ->
+            values[Keys.version7FreeSyringeNoticePending] = false
         }
     }
 
@@ -344,18 +388,21 @@ class LoemGameRepository(private val context: Context) {
             if (!state.isSleepHour(localHour) && !state.debugForceSleep && state.lightOff) {
                 state = state.copy(lightOff = false)
             }
-            if (state.evolution == 0 && state.ageHours(nowMillis) >= EVOLUTION_AGE_HOURS) {
+            if (
+                state.evolution == 0 &&
+                state.ageMillis(nowMillis) >= LoemEvolution.firstEvolutionAgeMillis(state)
+            ) {
                 state = state.evolved(LoemEvolution.chooseFromCare(state, nowMillis, localHour))
             }
             if (
                 state.evolution == 1 &&
                 state.ageHours(nowMillis) >= LoemEvolution.nextGoodEvolutionAgeHours(state)
             ) {
+                val carePath = LoemEvolution.chooseFromCare(state, nowMillis, localHour)
                 state = when {
-                    state.evolutionPath == EvolutionPath.GOOD ->
-                        state.evolved(EvolutionPath.GOOD)
+                    state.evolutionPath == EvolutionPath.GOOD -> state.evolved(carePath)
                     state.evolutionPath == EvolutionPath.BAD &&
-                        LoemEvolution.chooseFromCare(state, nowMillis, localHour) == EvolutionPath.GOOD ->
+                        carePath == EvolutionPath.GOOD ->
                         state.evolved(EvolutionPath.GOOD)
                     state.evolutionPath == EvolutionPath.BAD ->
                         state.evolved(EvolutionPath.BAD)
@@ -363,7 +410,7 @@ class LoemGameRepository(private val context: Context) {
                 }
             }
             if (LoemEvolution.canBecomeAdult(state, nowMillis)) {
-                state = state.evolved(EvolutionPath.GOOD)
+                state = state.evolved(state.evolutionPath)
             }
             writeState(values, state)
         }
@@ -473,15 +520,7 @@ class LoemGameRepository(private val context: Context) {
             val state = readState(values, now).applySleepLightPenalty(now, hour)
             writeState(
                 values,
-                state.copy(
-                    lightOff = off,
-                    lightOnDuringSleepSinceMillis = if (off) 0L else state.lightOnDuringSleepSinceMillis,
-                    lightOffDuringSleepSinceMillis = if (off) {
-                        state.lightOffDuringSleepSinceMillis
-                    } else {
-                        0L
-                    },
-                ),
+                state.withLightOff(off, now, hour),
             )
         }
     }
@@ -492,7 +531,14 @@ class LoemGameRepository(private val context: Context) {
             val state = readState(values, nowMillis).applySleepLightPenalty(nowMillis, hour)
             writeState(
                 values,
-                state.placedSleepTeddy(hour, nowMillis, Random.nextInt(10, 16)),
+                state.placedSleepTeddy(
+                    hour,
+                    nowMillis,
+                    Random.nextInt(
+                        SLEEP_TEDDY_MIN_HEALING_BONUS_PERCENT,
+                        SLEEP_TEDDY_MAX_HEALING_BONUS_PERCENT + 1,
+                    ),
+                ),
             )
         }
     }
@@ -602,6 +648,9 @@ class LoemGameRepository(private val context: Context) {
     suspend fun reset(nowMillis: Long = System.currentTimeMillis()) {
         context.loemDataStore.edit { values ->
             val previousState = readState(values, nowMillis)
+            val version7FreeSyringeProcessed = values[Keys.version7FreeSyringeProcessed] ?: false
+            val version7FreeSyringeNoticePending =
+                values[Keys.version7FreeSyringeNoticePending] ?: false
             val themeMode = values[Keys.themeMode]
                 ?: if (values[Keys.darkTheme] == true) ThemeMode.DARK.ordinal else ThemeMode.SYSTEM.ordinal
             val nextGeneration = ((values[Keys.generation] ?: 1).toLong() + 1)
@@ -624,6 +673,8 @@ class LoemGameRepository(private val context: Context) {
                 inheritedStartLevel = inheritedStartLevel,
             )
             values.clear()
+            values[Keys.version7FreeSyringeProcessed] = version7FreeSyringeProcessed
+            values[Keys.version7FreeSyringeNoticePending] = version7FreeSyringeNoticePending
             values[Keys.bornAt] = nowMillis
             values[Keys.generation] = nextGeneration
             values[Keys.battleLevelCap] = nextBattleLevelCap

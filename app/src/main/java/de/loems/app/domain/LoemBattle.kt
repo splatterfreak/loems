@@ -231,20 +231,30 @@ object LoemBattle {
 
     private fun baseStats(state: LoemGameState): Pair<Int, Int> = when {
         state.evolution == 0 -> 5 to 5
+        state.evolution >= 3 && state.evolutionPath == EvolutionPath.SERPENT -> 20 to 24
         state.evolutionPath == EvolutionPath.SERPENT -> 15 to 18
         state.evolution >= 3 &&
-            state.evolutionPath == EvolutionPath.GOOD -> 20 to 16
+            state.evolutionPath == EvolutionPath.MUD_TOAD -> 20 to 22
+        state.evolutionPath == EvolutionPath.MUD_TOAD -> 10 to 13
+        state.evolution >= 3 &&
+            state.evolutionPath == EvolutionPath.GOOD -> 22 to 20
         state.evolution >= 2 && state.evolutionPath == EvolutionPath.GOOD -> 18 to 15
-        state.evolution >= 2 && state.evolutionPath == EvolutionPath.BAD -> 4 to 6
+        state.evolution >= 3 && state.evolutionPath == EvolutionPath.BAD -> 15 to 26
+        state.evolution >= 2 && state.evolutionPath == EvolutionPath.BAD -> 6 to 6
         state.evolutionPath == EvolutionPath.GOOD -> 12 to 9
         else -> 8 to 14
     }
 
     fun healthLoss(won: Boolean, defense: Int): Int {
         val baseLoss = if (won) WINNER_HEALTH_LOSS else LOSER_HEALTH_LOSS
-        val reduction = (defense.coerceAtLeast(0) * DEFENSE_REDUCTION_PER_POINT)
-            .coerceAtMost(MAX_DEFENSE_REDUCTION)
+        val reduction = defenseReduction(defense)
         return (baseLoss * (1f - reduction)).roundToInt()
+            .coerceAtLeast(MIN_HEALTH_LOSS_PER_BATTLE)
+    }
+
+    fun defenseReduction(defense: Int): Float {
+        val effectiveDefense = defense.coerceAtLeast(0).toFloat()
+        return effectiveDefense / (effectiveDefense + DEFENSE_REDUCTION_SCALING)
     }
 
     private fun adjustedStrength(snapshot: LoemBattleSnapshot, element: Float): Float =
@@ -253,13 +263,13 @@ object LoemBattle {
     const val MIN_WIN_CHANCE = 0.20f
     const val MAX_WIN_CHANCE = 0.80f
     const val MIN_BATTLE_HEALTH = 15
-    const val DEFENSE_REDUCTION_PER_POINT = 0.02f
-    const val MAX_DEFENSE_REDUCTION = 0.50f
+    const val MIN_HEALTH_LOSS_PER_BATTLE = 2
+    const val DEFENSE_REDUCTION_SCALING = 30f
     const val BASE_WIN_EXPERIENCE = 20
     const val MIN_WIN_EXPERIENCE = 10
     const val MAX_WIN_EXPERIENCE = 40
-    const val LOSER_HEALTH_LOSS = 8
-    const val WINNER_HEALTH_LOSS = LOSER_HEALTH_LOSS / 2
+    const val LOSER_HEALTH_LOSS = 10
+    const val WINNER_HEALTH_LOSS = 5
     const val STRENGTH_PER_LEVEL = 2
     const val DEFENSE_PER_LEVEL = 1
     const val BASE_MAX_BATTLE_LEVEL = 9

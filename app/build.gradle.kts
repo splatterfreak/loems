@@ -11,7 +11,7 @@ android {
         applicationId = "de.loems.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = 6
+        versionCode = 8
         versionName = "0.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

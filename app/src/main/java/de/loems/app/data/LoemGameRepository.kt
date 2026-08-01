@@ -11,6 +11,7 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import de.loems.app.BuildConfig
 import de.loems.app.domain.EvolutionPath
+import de.loems.app.domain.EVOLUTION_COUNT
 import de.loems.app.domain.FoodType
 import de.loems.app.domain.INITIAL_HAPPINESS
 import de.loems.app.domain.INITIAL_HEALTH
@@ -34,10 +35,29 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import java.util.Calendar
+import java.util.TimeZone
 import kotlin.random.Random
 
 private val Context.loemDataStore by preferencesDataStore(name = "loem_game")
 private const val HOUR_MILLIS = 60 * 60 * 1_000L
+
+internal fun applyScheduledPoop(
+    state: LoemGameState,
+    nowMillis: Long,
+    timeZone: TimeZone = TimeZone.getDefault(),
+    nextPoopDelayMillis: () -> Long,
+): LoemGameState {
+    if (state.poopSinceMillis != 0L || nowMillis < state.nextPoopAtMillis) return state
+
+    val scheduledAt = state.nextPoopAtMillis
+    val scheduledCalendar = Calendar.getInstance(timeZone).apply { timeInMillis = scheduledAt }
+    val scheduledLocalHour = scheduledCalendar.get(Calendar.HOUR_OF_DAY)
+    val scheduledWhileSleeping =
+        state.isSleepHour(scheduledLocalHour) && state.isSleeping(scheduledAt, scheduledLocalHour)
+    if (!scheduledWhileSleeping) return state.copy(poopSinceMillis = scheduledAt)
+
+    return state.copy(nextPoopAtMillis = nowMillis + nextPoopDelayMillis())
+}
 
 internal data class Version7FreeSyringeDecision(
     val markProcessed: Boolean,
@@ -95,6 +115,8 @@ class LoemGameRepository(private val context: Context) {
         val pendingBattleDefense = intPreferencesKey("pending_battle_defense")
         val pendingBattleStartedAt = longPreferencesKey("pending_battle_started_at")
         val pendingBattleRevealAt = longPreferencesKey("pending_battle_reveal_at")
+        val pendingBattlePreviousExperience = intPreferencesKey("pending_battle_previous_experience")
+        val pendingBattleEarnedExperience = intPreferencesKey("pending_battle_earned_experience")
         val happiness = intPreferencesKey("happiness")
         val lastHappinessUpdate = longPreferencesKey("last_happiness_update")
         val health = intPreferencesKey("health")
@@ -238,11 +260,20 @@ class LoemGameRepository(private val context: Context) {
             localWinChance = values[Keys.pendingBattleWinChance] ?: return null,
             localDefense = values[Keys.pendingBattleDefense] ?: return null,
         )
+        val earnedExperience = values[Keys.pendingBattleEarnedExperience] ?: if (result.won) {
+            LoemBattle.experienceReward(result.localPower, result.opponentPower)
+        } else {
+            0
+        }
+        val previousExperience = values[Keys.pendingBattlePreviousExperience]
+            ?: ((values[Keys.battleExperience] ?: 0) - earnedExperience).coerceAtLeast(0)
         return PendingLoemBattle(
             id = id,
             result = result,
             startedAtMillis = values[Keys.pendingBattleStartedAt] ?: return null,
             revealAtMillis = values[Keys.pendingBattleRevealAt] ?: return null,
+            previousBattleExperience = previousExperience,
+            earnedBattleExperience = earnedExperience,
         )
     }
 
@@ -262,6 +293,8 @@ class LoemGameRepository(private val context: Context) {
             values.remove(Keys.pendingBattleDefense)
             values.remove(Keys.pendingBattleStartedAt)
             values.remove(Keys.pendingBattleRevealAt)
+            values.remove(Keys.pendingBattlePreviousExperience)
+            values.remove(Keys.pendingBattleEarnedExperience)
             return
         }
         val result = pendingBattle.result
@@ -276,6 +309,8 @@ class LoemGameRepository(private val context: Context) {
         values[Keys.pendingBattleDefense] = result.localDefense
         values[Keys.pendingBattleStartedAt] = pendingBattle.startedAtMillis
         values[Keys.pendingBattleRevealAt] = pendingBattle.revealAtMillis
+        values[Keys.pendingBattlePreviousExperience] = pendingBattle.previousBattleExperience
+        values[Keys.pendingBattleEarnedExperience] = pendingBattle.earnedBattleExperience
     }
 
     private fun writeState(values: androidx.datastore.preferences.core.MutablePreferences, state: LoemGameState) {
@@ -369,19 +404,17 @@ class LoemGameRepository(private val context: Context) {
     ) {
         context.loemDataStore.edit { values ->
             var state = readState(values, nowMillis)
-            if (state.poopSinceMillis == 0L && nowMillis >= state.nextPoopAtMillis) {
-                state = state.copy(poopSinceMillis = state.nextPoopAtMillis)
-            }
+            state = applyScheduledPoop(state, nowMillis) { randomPoopDelay() }
             state = state.applySyringeAgeReward(nowMillis)
             state = state.applySleepLightPenalty(nowMillis, localHour)
             state = state.applyProlongedPoorConditionHealthLoss(nowMillis)
             val elapsedCareHours =
                 (nowMillis - state.lastCareUpdateMillis).coerceAtLeast(0) / HOUR_MILLIS.toFloat()
             if (elapsedCareHours >= 1f / 60f) {
-                state = state.copy(
-                    careScore = state.careScore +
-                        state.careSnapshotScore(nowMillis, localHour) * elapsedCareHours,
-                    careHours = state.careHours + elapsedCareHours,
+                state = state.withCareObservation(
+                    snapshotScore = state.careSnapshotScore(nowMillis, localHour),
+                    elapsedHours = elapsedCareHours,
+                ).copy(
                     lastCareUpdateMillis = nowMillis,
                 )
             }
@@ -411,6 +444,18 @@ class LoemGameRepository(private val context: Context) {
             }
             if (LoemEvolution.canBecomeAdult(state, nowMillis)) {
                 state = state.evolved(state.evolutionPath)
+            }
+            if (LoemEvolution.canBecomeUltra(state, nowMillis)) {
+                state = state.evolved(EvolutionPath.GOOD)
+            }
+            if (LoemEvolution.canBecomeSpaceRiftUrToad(state, nowMillis)) {
+                state = state.evolved(EvolutionPath.MUD_TOAD)
+            }
+            if (LoemEvolution.canBecomeSpaceRiftWorldSerpent(state, nowMillis)) {
+                state = state.evolved(EvolutionPath.SERPENT)
+            }
+            if (LoemEvolution.canBecomeSpaceRiftArchmagePoop(state, nowMillis)) {
+                state = state.evolved(EvolutionPath.BAD)
             }
             writeState(values, state)
         }
@@ -466,15 +511,19 @@ class LoemGameRepository(private val context: Context) {
             if (values[Keys.lastBattleEventId] == eventId) return@edit
             val state = readState(values, nowMillis)
                 .applySleepLightPenalty(nowMillis, localHour())
+            val stateAfterBattle = LoemBattle.applyResult(state, result, nowMillis)
             val pendingBattle = PendingLoemBattle(
                 id = eventId,
                 result = result,
                 startedAtMillis = nowMillis,
                 revealAtMillis = nowMillis + revealDelayMillis.coerceAtLeast(0),
+                previousBattleExperience = state.battleExperience,
+                earnedBattleExperience =
+                    (stateAfterBattle.battleExperience - state.battleExperience).coerceAtLeast(0),
             )
             writeState(
                 values,
-                LoemBattle.applyResult(state, result, nowMillis).copy(
+                stateAfterBattle.copy(
                     pendingBattle = pendingBattle,
                 ),
             )
@@ -495,10 +544,11 @@ class LoemGameRepository(private val context: Context) {
     suspend fun addAgeHour(nowMillis: Long = System.currentTimeMillis()) {
         context.loemDataStore.edit { values ->
             val state = readState(values, nowMillis)
-            val simulated = state.withSimulatedElapsedHours(nowMillis, 1).copy(
+            val simulated = state.withSimulatedElapsedHours(nowMillis, 1).withCareObservation(
+                snapshotScore = state.careSnapshotScore(nowMillis, localHour()),
+                elapsedHours = 1f,
+            ).copy(
                 bonusAgeHours = state.bonusAgeHours + 1,
-                careScore = state.careScore + state.careSnapshotScore(nowMillis, localHour()),
-                careHours = state.careHours + 1f,
                 lastCareUpdateMillis = nowMillis,
             )
             writeState(values, simulated.applySyringeAgeReward(nowMillis))
@@ -538,6 +588,20 @@ class LoemGameRepository(private val context: Context) {
                         SLEEP_TEDDY_MIN_HEALING_BONUS_PERCENT,
                         SLEEP_TEDDY_MAX_HEALING_BONUS_PERCENT + 1,
                     ),
+                ),
+            )
+        }
+    }
+
+    suspend fun removeSleepTeddy(nowMillis: Long = System.currentTimeMillis()) {
+        context.loemDataStore.edit { values ->
+            val hour = localHour()
+            val state = readState(values, nowMillis).applySleepLightPenalty(nowMillis, hour)
+            writeState(
+                values,
+                state.copy(
+                    teddyPlacedForSleep = false,
+                    teddyHealingBonusPercent = 0,
                 ),
             )
         }
@@ -629,7 +693,7 @@ class LoemGameRepository(private val context: Context) {
         context.loemDataStore.edit { values ->
             val now = System.currentTimeMillis()
             val state = readState(values, now)
-            val targetEvolution = evolution.coerceIn(0, 3)
+            val targetEvolution = evolution.coerceIn(0, EVOLUTION_COUNT - 1)
             val targetPath = if (targetEvolution == 0) EvolutionPath.UNDECIDED else path
             val target = state.copy(
                 evolution = targetEvolution,

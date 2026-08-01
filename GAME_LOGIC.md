@@ -365,6 +365,33 @@ Pflegedurchschnitt = Pflegesumme / Pflegestunden
 Solange noch keine Pflegestunden gespeichert sind, wird direkt der aktuelle Momentwert benutzt.
 Der Debug-Button „+1 Stunde“ addiert den aktuellen Momentwert mit genau einer Pflegestunde.
 
+Das Pflegegedächtnis besitzt ein maximales Gewicht von `72` Stunden. Bis zu dieser Grenze
+werden alle Beobachtungen normal aufsummiert. Danach wird die bisherige Historie proportional
+verdichtet, bevor die neue Beobachtung hinzukommt:
+
+```text
+neue berücksichtigte Stunden = min(verstrichene Pflegezeit; 72)
+behaltene alte Stunden = min(bisherige Pflegestunden; 72 - neue berücksichtigte Stunden)
+alter Pflegedurchschnitt = bisherige Pflegesumme / bisherige Pflegestunden
+Pflegesumme_neu = alter Pflegedurchschnitt × behaltene alte Stunden
+                  + Momentwert × neue berücksichtigte Stunden
+Pflegestunden_neu = behaltene alte Stunden + neue berücksichtigte Stunden
+```
+
+Beim ersten Update eines älteren Spielstands wird dessen bisheriger Pflegedurchschnitt dadurch
+unverändert in das 72-Stunden-Gedächtnis übernommen. Anschließend erhalten neue Pflegezustände
+schrittweise mehr Gewicht, ohne dass der Durchschnitt beim Umstieg springt.
+
+Auf dem Hauptbildschirm wird der Durchschnitt bewusst nur als einfache Pflegeampel angezeigt:
+
+| Intervall | Anzeige |
+|---|---|
+| `< −2,0` | Rot – braucht dringend Pflege |
+| `−2,0 bis < 1,0` | Gelb – Pflege ausbaufähig |
+| `≥ 1,0` | Grün – gut gepflegt |
+
+Der genaue Zahlenwert bleibt der ausführlichen Status- und Debugansicht vorbehalten.
+
 ## 12. Evolution
 
 ### Erste Evolution
@@ -554,6 +581,12 @@ Im Status stehen Kampf-Level und EP-Fortschritt des aktuellen Levels als `vorhan
 die Gewinnquote sowie direkt darunter die absolute Zahl gewonnener und verlorener Kämpfe.
 Ohne bisherige Kämpfe beträgt die Gewinnquote `0,0 %`;
 ansonsten gilt `Siege ÷ (Siege + Niederlagen) × 100`.
+
+Auf dem Hauptbildschirm steht das Kampf-Level zusätzlich oben rechts in einem lilafarbenen
+EP-Ring. Der Ring zeigt den Fortschritt bis zum nächsten Level und ist am Maximallevel vollständig
+gefüllt. Nach einem Sieg wird im Ergebnisfenster der tatsächlich gutgeschriebene EP-Zuwachs vom
+alten Stand aus animiert. Überschreitet die Animation eine Levelgrenze, ploppt die Levelzahl auf,
+der Ring beginnt für das neue Level wieder bei null und zählt überschüssige EP weiter.
 
 ### Kampfanimationen
 
@@ -747,6 +780,8 @@ Sonderlogik erhalten, wenn dieselbe Regel sinnvoll zentral für alle Löms gelte
 | Gesundheit | 0 | 100 |
 | Gewicht | 50 % des Richtgewichts | 300 % des Richtgewichts |
 | Evolution | 0 | 3 |
+| Pflege-Momentwert und -Durchschnitt | −10 | +8 |
+| Gewichtete Pflegehistorie | 0 Stunden | 72 Stunden |
 
 Zähler wie Mahlzeiten, Training, Siege, Niederlagen und Kampf-EP besitzen aktuell im lokalen Spielstand
 keine künstliche Obergrenze. Über das WLAN-Protokoll empfangene Kampfwerte werden aus

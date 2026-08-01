@@ -13,21 +13,21 @@ from PIL import Image
 
 
 SPRITES = {
-    "Junges Löm": "loem_idle_sheet.png",
-    "Flügel-Löm": "loem_good_evolution_sheet.png",
-    "Wurst-Löm": "loem_bad_evolution_sheet.png",
-    "Majestätisches Flügel-Löm": "loem_wing_evolution_idle_sheet.png",
-    "Matschkröten-Löm": "loem_mud_toad_idle_sheet.png",
-    "Prunkschlangen-Löm": "loem_serpent_evolution_idle_sheet.png",
-    "Haufen-Löm": "loem_poop_evolution_idle_sheet.png",
-    "Sturmkaiser-Löm": "loem_stormkaiser_idle_sheet.png",
-    "Sturmkaiserin-Löm": "loem_stormkaiser_female_idle_sheet.png",
-    "Warzenkaiser-Löm": "loem_wart_emperor_male_idle_sheet.png",
-    "Warzenkaiserin-Löm": "loem_wart_emperor_female_idle_sheet.png",
-    "Armageddon-Prunkschlangenkaiser-Löm": "loem_armageddon_serpent_male_idle_sheet.png",
-    "Armageddon-Prunkschlangenkaiserin-Löm": "loem_armageddon_serpent_female_idle_sheet.png",
-    "Trübsal-Zauberhaufen-Löm": "loem_gloom_wizard_poop_male_idle_sheet.png",
-    "Trübsal-Zauberhaufen-Lömin": "loem_gloom_wizard_poop_female_idle_sheet.png",
+    "Junges Löm": "loem_idle_sheet.webp",
+    "Flügel-Löm": "loem_good_evolution_sheet.webp",
+    "Wurst-Löm": "loem_bad_evolution_sheet.webp",
+    "Majestätisches Flügel-Löm": "loem_wing_evolution_idle_sheet.webp",
+    "Matschkröten-Löm": "loem_mud_toad_idle_sheet.webp",
+    "Prunkschlangen-Löm": "loem_serpent_evolution_idle_sheet.webp",
+    "Haufen-Löm": "loem_poop_evolution_idle_sheet.webp",
+    "Sturmkaiser-Löm": "loem_stormkaiser_idle_sheet.webp",
+    "Sturmkaiserin-Löm": "loem_stormkaiser_female_idle_sheet.webp",
+    "Warzenkaiser-Löm": "loem_wart_emperor_male_idle_sheet.webp",
+    "Warzenkaiserin-Löm": "loem_wart_emperor_female_idle_sheet.webp",
+    "Armageddon-Prunkschlangenkaiser-Löm": "loem_armageddon_serpent_male_idle_sheet.webp",
+    "Armageddon-Prunkschlangenkaiserin-Löm": "loem_armageddon_serpent_female_idle_sheet.webp",
+    "Trübsal-Zauberhaufen-Löm": "loem_gloom_wizard_poop_male_idle_sheet.webp",
+    "Trübsal-Zauberhaufen-Lömin": "loem_gloom_wizard_poop_female_idle_sheet.webp",
 }
 
 

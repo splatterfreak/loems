@@ -13,7 +13,7 @@ Create production-ready Loems sprites that animate without jitter, fit the exist
 
 Every generated or edited Loems sprite must satisfy these constraints:
 
-- Use PNG with transparent background.
+- Use lossless WebP with transparent background for every production Android asset. PNG is allowed only as a temporary generation or editing source and must be converted to pixel-identical lossless WebP before integration.
 - Keep all frames in equal-sized cells unless editing an existing sheet that already has measured `SpriteFrame` rectangles.
 - Leave at least 48 px of transparent safety padding between visible pixels and every cell edge for generated sheets. Treat 28 px as the absolute minimum for existing legacy sheets only.
 - Keep every visible pixel inside its own cell. Wings, horns, tails, food, effects, outlines, antialiasing, and glow pixels must never be clipped by a cell edge or appear inside a neighboring frame's cell.
@@ -60,7 +60,7 @@ For Loems app integration, do not pass full 512 x 512 safety cells to `LoemSprit
 
 Use stable render crop rectangles:
 
-- Keep the PNG cells large enough for generation safety and clipping checks.
+- Keep the source cells large enough for generation safety and clipping checks.
 - Define `SpriteFrame` rectangles as equal-size crops around the shared visible union for the animation, not necessarily the entire cell.
 - Keep every crop rectangle's bottom line, torso anchor, and dimensions consistent across idle frames.
 - Include enough crop margin so wing tips, horn tips, outlines, and antialiasing are not clipped.
@@ -69,7 +69,24 @@ Use stable render crop rectangles:
 - For state variants of the same evolution, reuse the exact same stable crop geometry whenever possible. Hungry, sleep, melon, ham, and other variants should change expression or props inside the crop, not the body anchor, frame dimensions, rendered size, or ground line.
 - Express character states through the sprite art itself, not UI-like symbols. Avoid floating `!`, `?`, `Z`, emoji-style badges, labels, or icon overlays in sprite sheets. Hunger should read through eyes, brows, mouth, tongue, posture, or drool; sleep should read through closed eyes, relaxed mouth, lowered posture, or calmer breathing.
 - Food props must match the existing Loems food style. Melon and ham variants should use the same kind of large, shaded, outlined food pieces as the established feeding sheets, not simplified icon-sized props.
+- Keep each feeding prop visually recognizable as the same item shown in the food selector. Preserve its characteristic silhouette, palette, orientation, and major details when translating a compact selector symbol into the larger sprite-art version; do not substitute a different cut, preparation, or food shape.
+- When replacing or standardizing an existing feeding prop, rebuild from a clean pre-edit source and remove the complete previous prop layer first, including detached crumbs, highlights, bone/rind fragments, outlines, and differently positioned intermediate stages. Never composite a replacement over an uncleared old prop. Every frame may contain exactly one logical food item or its single physical remainder; a second overlapping or nearby food silhouette is a blocking QA failure. Make bulk standardization idempotent so rerunning it cannot stack another prop layer.
 - For every feeding animation, edit the original character anatomy directly in each frame. The mouth opening must deform the actual jaw, cheek, muzzle outline, teeth, and tongue as one coherent head drawing. Never simulate eating by drawing or compositing a separate mouth shape over an unchanged closed-mouth sprite. Build and approve the mouth/jaw motion first, then place the established food art and bite stages into those anatomically edited frames.
+- Every eating sequence must contain a clearly readable mouth cycle with at least three distinct phases: open/approach, closed bite or chew, and reopen/release. The real lower jaw, muzzle, cheeks, teeth, and tongue must visibly move between those phases. Moving only the food, head, body, glow, or camera while the mouth drawing stays unchanged is a blocking QA failure, even when the sheet otherwise animates smoothly.
+- Treat feeding as a one-shot, irreversible consumption sequence. For every bite, show `mouth open with the current food amount -> mouth closed on the food -> mouth reopened with a visibly smaller bitten remainder`. Never return to an earlier, larger, or less-bitten food stage later in the sequence.
+- Make the visible food amount monotonically decrease across the complete feeding sequence. It may stay unchanged only between the open and closed contact frames of the same bite. After each closed bite, remove a clearly readable piece before the next open frame. End with no food visible and a closed-mouth chew or swallow pose suitable for holding as the final non-looping app frame.
+- For bone-in food, apply that monotonic check to the edible meat mask rather than the combined meat-plus-bone alpha area. Revealing a previously covered section of the fixed bone can keep the total prop silhouette level or make it slightly larger even while the edible amount correctly decreases. Verify separately that meat pixels strictly decrease after completed bites and reach zero, while the bone remains invariant.
+- Never represent eating by uniformly scaling, resizing, or squeezing the complete food sprite. A smaller copy of the untouched food is not a bite stage and is a blocking QA failure.
+- Keep the food's original scale, orientation, supporting-hand/holding anchor, rind or bone thickness, lighting, and unaffected outer edges fixed between bite stages. Show consumption by cumulatively removing material from the mouth-facing edge and redrawing that edge with clear concave, irregular semicircular tooth marks. Previously removed material must never return. Only the final physical remnant may have much smaller bounds because most of the original food has actually been bitten away.
+- For bone-in foods such as ham, model one complete fixed bone running through the meat from the start; do not treat the initially protruding end as a short handle that later grows into a full bone. Begin with a completely whole, unbitten piece whose meat hides the mouth-facing bone head and most of the shaft. As bites advance from the mouth-facing edge, reveal that buried bone head first and then an increasingly long, continuous section of the same shaft. Remove only meat: the bone must never appear from nowhere, split, float, change length, scale, shape, orientation, color, or anchor. The penultimate visible food stage may retain only a small meat patch around the far shaft; the last visible food stage shows that same complete bone alone, with both ends and the full connecting shaft visible. The following final animation frame contains neither meat nor bone.
+- Determine bite direction from the actual mouth-to-food contact in the composed character frame and keep that direction consistent. If the mouth reaches the food from the left, the first missing chunk must be on the left and every later bite must advance left-to-right; mirror this rule for contact from the right. Never generate visually attractive bite marks on the side facing away from the mouth.
+- Lock the character outside the articulated mouth, cheeks, food, and supporting-hand region throughout feeding. Do not recrop, recenter, rescale, or redraw the full character between bites. Prefer paired open/closed mouth key poses plus progressively reduced food stages over independently generated full-body frames.
+- Every production feeding frame must be one complete, flattened full-body RGBA composition. Never place or animate a rectangular mouth, head, or face crop over another character render. Build the approved open-mouth and closed-mouth key poses on one locked full-body base, then flatten and isolate every cell before sheet assembly. The runtime must display isolated frame bitmaps or otherwise prove that no neighboring cell, stale layer, or alternate body pose can bleed into the active frame.
+- Clear RGB values wherever alpha is zero before lossless WebP export. Reject hidden old-character pixels, semi-transparent rectangular bands, doubled eyes, doubled outlines, or remnants of another body pose even when they become visible only on a contrasting background.
+- A closed lower jaw must be compact, rounded, and anatomically continuous from cheek to neck. Reject a long vertical chin wall, plate-like slab, detached or doubled jaw outline, or a jaw contour that crosses or clips into the neck, torso, hand, or food.
+- Inspect every revised feeding sheet at 2x or 4x scale on a contrasting background. Compare the complete external head and chin silhouette through every open/closed transition; a clean mouth interior does not pass when the outer jaw clips, jumps, or overlays another contour.
+- Preview one-shot feeding animations from full food to the empty held final frame. A GIF viewer may repeat from empty back to full, but never encode that reset as an in-sequence frame or use a ping-pong order in production.
+- Exempt non-looping feeding sheets from last-to-first silhouette-IoU requirements. Validate forward frame transitions, the empty final hold, and the app clip's non-looping behavior instead; the intentional empty-to-full GIF preview reset is not an animation transition used by the app.
 - If wide wings, horns, tail, or effects change the overall silhouette so much that the character appears to slide even when the torso anchor is stable, reject those frames for idle use. Regenerate a calmer idle or build the idle loop from the stable neutral frames instead of using every generated frame.
 - Idle animations must move deliberately but never twitch. For idle and state-idle loops such as hungry idle or sleep idle, keep the body anchor, feet, horns, wings, tail, and outer silhouette stable. Add life through tiny local changes such as breath shading, eyelids, mouth, tongue, drool, cheek motion, or a controlled 1-2 px breathing deformation that does not change the ground line or apparent screen position.
 - For majestic winged idle variants, wings and tail should move enough to feel alive, similar to the other Loems idle loops. Keep the movement controlled rather than frozen: a readable small local flap/sway or overlay motion is fine when feet, ground line, body center, crop size, and frame-to-frame scale stay stable, and there are no cropped or flickering edge pixels.
@@ -123,14 +140,14 @@ When creating a completely new Loem form or evolution tier, generate only its id
 6. Remove backgrounds and separators.
 7. Run the automated QA gate with `tools/qa_sprite_sheet.py`, then inspect the animated loop visually.
 8. If any blocking QA check fails, reject the output before showing it to the user. Correct the source or regenerate the canonical pose, rebuild the sheet, and rerun QA. Cropping, recentering, or normalizing independently redrawn frames does not cure anatomy or silhouette jitter.
-9. Deliver the PNG plus the passing QA result and any required frame metadata or implementation notes.
+9. Deliver the lossless WebP plus the passing QA result and any required frame metadata or implementation notes.
 
 ## Prompt Pattern
 
 Use a precise prompt like this when generating:
 
 ```text
-Create a transparent PNG sprite sheet for the Loems Android game.
+Create a transparent sprite sheet for the Loems Android game. Deliver the production asset as lossless WebP; a generated PNG is only an intermediate source.
 Layout: 6 frames, 3 columns x 2 rows, each cell 512 x 512 px.
 Character: [baby/good evolution/bad evolution], [animation state].
 Style: cute rounded 2D game sprite, consistent line weight, consistent lighting, same camera angle in all frames.
@@ -173,11 +190,11 @@ Run QA after generation or editing. If any blocking item fails, reject the asset
 
 ### Mandatory Pre-Delivery QA Gate
 
-- Run `tools/qa_sprite_sheet.py <sheet.png>` for every generated sheet before presenting it.
+- Run `tools/qa_sprite_sheet.py <sheet.webp>` for every generated sheet before presenting it.
 - Generate and watch a looping preview that includes the last-to-first transition.
-- After every sprite generation or revision, always create and show the user a GIF preview. Never present only the raw PNG or sprite sheet.
+- After every sprite generation or revision, always create and show the user a GIF preview. Never present only the raw WebP or sprite sheet.
 - For a canonical single-pose design approval, show a static looping GIF of that approved pose. For an animation, show the complete ordered frame loop, including its last-to-first transition.
-- Save the GIF beside the corresponding PNG with a clear `_preview.gif` suffix so the reviewed preview remains traceable to its source asset.
+- Save the GIF beside the corresponding WebP with a clear `_preview.gif` suffix so the reviewed preview remains traceable to its source asset.
 - Do not present, recommend, integrate, or ask for approval of a sheet that fails automated or visual QA.
 - QA is part of generation, not an optional later review. Iterate internally until it passes or report that no valid result could be produced.
 - Prompt constraints alone never count as verification.
@@ -199,9 +216,15 @@ Blocking checks:
 - Horn placement is stable across frames. Horn tips may follow the intended head bob, but they must not flicker, change shape, swap size, touch the cell edge, or read as different anatomy from frame to frame.
 - Perform a frame-by-frame anatomy inventory audit against the canonical design. Confirm identical, realistic counts and attachment sides for heads, eyes, horns, wings, arms/hands or forelegs/front paws, legs/feet or hind legs/hind paws, tails, fingers/toes, and all other repeated parts. Occluded parts must be explainable by the pose; unexplained missing, extra, fused, duplicated, or side-swapped anatomy is a blocking failure.
 - The animation reads smoothly when frames are flipped through in sequence.
+- Feeding loops visibly pass through open, closed-bite/chew, and reopened mouth phases; reject any eating loop whose mouth silhouette remains static.
+- Feeding edible-food area is monotonically non-increasing, every completed bite produces a smaller edible remainder, no larger edible stage reappears, and the final production frame contains no food. For bone-in food, measure meat separately from the revealed invariant bone. Reject ping-pong keyframe orders and sequences that end with remaining food.
+- Feeding props retain one constant source scale and holding anchor; their loss of area must come from cumulative visible bite cutouts with believable tooth-scalloped contours, never from whole-prop downscaling.
+- The progressive bite edge starts on the side physically touching the mouth and advances away from that contact side in one consistent direction.
+- Every feeding cell is a flattened, isolated full-body frame with no rectangular partial-character overlay, mixed body pose, neighboring-cell bleed, doubled anatomy, or nonzero hidden RGB beneath fully transparent pixels.
+- Every closed-mouth feeding frame passes the compact, rounded cheek-to-neck jaw-continuity check with no slab-like lower chin, detached outline, or clipping overlap.
 - The body recolor mask will not capture eyes, teeth, outline, cheeks, food, props, or effects.
 - No hidden background remains in semi-transparent pixels.
-- The final file is a PNG with transparency.
+- The final production file is a lossless WebP with transparency and must decode pixel-identically to its approved source.
 - If used in the app, the relevant Android build or targeted compile still succeeds.
 
 Required final QA report:

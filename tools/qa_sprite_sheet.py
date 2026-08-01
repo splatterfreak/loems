@@ -64,6 +64,11 @@ def main() -> int:
     args = parser.parse_args()
 
     sheet = Image.open(args.sheet).convert("RGBA")
+    hidden_rgb = sum(
+        1
+        for red, green, blue, alpha in sheet.get_flattened_data()
+        if alpha == 0 and (red != 0 or green != 0 or blue != 0)
+    )
     if sheet.width % args.columns or sheet.height % args.rows:
         print("FAIL: sheet dimensions do not divide evenly into the requested grid")
         return 1
@@ -79,6 +84,9 @@ def main() -> int:
             frames.append(analyze(frame, args.alpha_threshold))
 
     failures = []
+    print(f"Hidden RGB beneath alpha=0: {hidden_rgb} pixels")
+    if hidden_rgb:
+        failures.append(f"{hidden_rgb} fully transparent pixels retain hidden RGB")
     heights = []
     for index, frame in enumerate(frames, start=1):
         left, top, right, bottom = frame.bbox

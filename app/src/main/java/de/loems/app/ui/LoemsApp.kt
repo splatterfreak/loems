@@ -37,6 +37,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.FitnessCenter
@@ -87,6 +88,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
@@ -112,9 +114,7 @@ import de.loems.app.domain.TRAINING_BONUS_WINDOW_MILLIS
 import de.loems.app.domain.EvolutionPath
 import de.loems.app.domain.FoodType
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import kotlin.math.abs
 import kotlin.math.PI
 import kotlin.math.sin
@@ -138,7 +138,11 @@ fun LoemsApp(
 ) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
+    val poopSoundPlayer = remember(context) {
+        PoopSoundPlayer(context)
+    }
     val state by repository.gameState.collectAsState(initial = null)
+    var observedPoopSinceMillis by remember { mutableStateOf<Long?>(null) }
     val version7FreeSyringeNoticePending by
         repository.version7FreeSyringeNoticePending.collectAsState(initial = false)
     val battleManager = remember(repository) {
@@ -180,6 +184,19 @@ fun LoemsApp(
 
     DisposableEffect(battleManager) {
         onDispose { battleManager.close() }
+    }
+
+    DisposableEffect(poopSoundPlayer) {
+        onDispose { poopSoundPlayer.release() }
+    }
+
+    LaunchedEffect(state?.poopSinceMillis) {
+        val currentPoopSinceMillis = state?.poopSinceMillis ?: return@LaunchedEffect
+        val previousPoopSinceMillis = observedPoopSinceMillis
+        if (previousPoopSinceMillis == 0L && currentPoopSinceMillis > 0L) {
+            poopSoundPlayer.playFart()
+        }
+        observedPoopSinceMillis = currentPoopSinceMillis
     }
 
     LaunchedEffect(state) {
@@ -275,6 +292,8 @@ fun LoemsApp(
                         debugSpritePreview = debugSpritePreview,
                         onLightChange = { off -> scope.launch { repository.setLightOff(off) } },
                         onPlaceSleepTeddy = { scope.launch { repository.placeSleepTeddy() } },
+                        onRemoveSleepTeddy = { scope.launch { repository.removeSleepTeddy() } },
+                        onFlushSound = { poopSoundPlayer.playFlush() },
                         onFlush = { scope.launch { repository.flushPoop() } },
                         onRename = { name -> scope.launch { repository.renameLoem(name) } },
                     )
@@ -404,6 +423,8 @@ private fun HomeScreen(
     debugSpritePreview: DebugSpritePreview?,
     onLightChange: (Boolean) -> Unit,
     onPlaceSleepTeddy: () -> Unit,
+    onRemoveSleepTeddy: () -> Unit,
+    onFlushSound: () -> Unit,
     onFlush: () -> Unit,
     onRename: (String) -> Unit,
 ) {
@@ -437,50 +458,54 @@ private fun HomeScreen(
         modifier = Modifier.fillMaxSize().padding(horizontal = 20.dp, vertical = 12.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Text(
-            text = if (state.isHatched(nowMillis)) {
-                state.name
-            } else {
-                "Dein Löm-Ei"
-            },
-            modifier = if (state.isHatched(nowMillis)) {
-                Modifier.clickable { showNameDialog = true }
-            } else {
-                Modifier
-            },
-            style = MaterialTheme.typography.headlineSmall,
-            fontWeight = FontWeight.Bold,
-        )
         if (state.isHatched(nowMillis)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                CareTrafficLight(
+                    careAverage = state.careAverage(nowMillis, localHour),
+                )
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(horizontal = 8.dp)
+                        .clickable { showNameDialog = true },
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Text(
+                        text = state.name,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        text = formatAge(state.ageHours(nowMillis)),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.secondary,
+                    )
+                }
+                LevelExperienceRing(
+                    totalExperience = state.battleExperience,
+                    levelCap = state.battleLevelCap,
+                    generation = state.generation,
+                )
+            }
+            Spacer(Modifier.height(10.dp))
+        } else {
             Text(
-                LoemEvolution.title(state.evolution, state.evolutionPath, state.gender),
+                text = "Dein Löm-Ei",
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold,
+            )
+            Text(
+                "Schlüpft in ${formatRemaining(state.hatchRemainingMillis(nowMillis))}",
                 color = MaterialTheme.colorScheme.secondary,
             )
+            Spacer(Modifier.height(12.dp))
         }
-        Text(
-            text = if (state.isHatched(nowMillis)) {
-                "Alter: ${formatAge(state.ageHours(nowMillis))}"
-            } else {
-                "Schlüpft in ${formatRemaining(state.hatchRemainingMillis(nowMillis))}"
-            },
-            color = MaterialTheme.colorScheme.secondary,
-        )
-        Spacer(Modifier.height(12.dp))
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text("Hunger", fontWeight = FontWeight.SemiBold)
-            Text("${vitals.hunger.toInt()} %")
-        }
-        LinearProgressIndicator(
-            progress = { vitals.hunger / 100f },
-            modifier = Modifier.fillMaxWidth().height(10.dp),
-            color = when {
-                vitals.hunger >= 75f -> Color(0xFFC3423F)
-                vitals.hunger >= 45f -> Color(0xFFE39A36)
-                else -> MaterialTheme.colorScheme.primary
-            },
-            trackColor = MaterialTheme.colorScheme.surfaceContainer,
-        )
-        Spacer(Modifier.height(18.dp))
         Card(
             modifier = Modifier.fillMaxWidth().weight(1f),
             colors = CardDefaults.cardColors(
@@ -502,62 +527,89 @@ private fun HomeScreen(
                 contentAlignment = Alignment.Center,
             ) {
                 Box(Modifier.fillMaxSize()) {
-                    if (isNight && state.isHatched(nowMillis)) {
-                        Row(
-                            modifier = Modifier.align(Alignment.TopStart),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Button(onClick = { onLightChange(!state.lightOff) }) {
-                                Text(if (state.lightOff) "💡" else "🌙")
-                            }
-                            Spacer(Modifier.size(6.dp))
-                            DraggableSleepTeddy(
-                                enabled = isSleeping && !state.teddyPlacedForSleep,
-                                placed = state.teddyPlacedForSleep,
-                                onDropped = onPlaceSleepTeddy,
+                    if (isSleeping && state.lightOff) {
+                        if (state.teddyPlacedForSleep) {
+                            FloatingSleepTeddy(
+                                modifier = Modifier
+                                    .align(Alignment.Center)
+                                    .clickable(onClick = onRemoveSleepTeddy),
                             )
                         }
-                    }
-                    if (state.poopSinceMillis > 0L) {
-                        Button(
-                            onClick = { if (!isFlushing) isFlushing = true },
-                            enabled = !isFlushing,
-                            modifier = Modifier.align(Alignment.TopEnd),
-                        ) {
-                            Text("🚽")
-                        }
-                    }
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        if (state.isHatched(nowMillis)) {
-                            Row(verticalAlignment = Alignment.Bottom) {
-                                if (state.poopSinceMillis > 0L) {
-                                    AnimatedPoop(isFlushing = isFlushing)
-                                }
-                                 Box(contentAlignment = Alignment.TopEnd) {
-                                    IdleLoem(
-                                        state = state,
-                                        isHungry = vitals.hunger >= HUNGRY_EXPRESSION_THRESHOLD,
-                                        isTired = isSleeping,
-                                        debugSpritePreview = debugSpritePreview,
-                                    )
-                                    if (isSleeping && state.teddyPlacedForSleep) {
-                                        FloatingSleepTeddy(
-                                            modifier = Modifier.align(Alignment.TopCenter),
-                                        )
-                                    }
-                                 }
-                            }
-                        } else {
-                            LoemEgg()
-                        }
-                    }
-                    if (isSleeping && state.lightOff) {
                         Box(Modifier.align(Alignment.Center).padding(bottom = 210.dp)) {
                             AnimatedZzz()
+                        }
+                    } else {
+                        if (isNight && state.isHatched(nowMillis)) {
+                            Row(
+                                modifier = Modifier.align(Alignment.TopStart),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Button(onClick = { onLightChange(!state.lightOff) }) {
+                                    Text(if (state.lightOff) "💡" else "🌙")
+                                }
+                                if (!state.teddyPlacedForSleep) {
+                                    Spacer(Modifier.size(6.dp))
+                                    DraggableSleepTeddy(
+                                        enabled = isSleeping,
+                                        onDropped = onPlaceSleepTeddy,
+                                    )
+                                }
+                            }
+                        }
+                        if (state.poopSinceMillis > 0L) {
+                            Button(
+                                onClick = {
+                                    if (!isFlushing) {
+                                        onFlushSound()
+                                        isFlushing = true
+                                    }
+                                },
+                                enabled = !isFlushing,
+                                modifier = Modifier.align(Alignment.TopEnd),
+                            ) {
+                                Text("🚽")
+                            }
+                        }
+                        Column(
+                            modifier = Modifier.fillMaxSize(),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center,
+                        ) {
+                            if (state.isHatched(nowMillis)) {
+                                Row(verticalAlignment = Alignment.Bottom) {
+                                    if (state.poopSinceMillis > 0L) {
+                                        AnimatedPoop(isFlushing = isFlushing)
+                                    }
+                                    Box(contentAlignment = Alignment.TopEnd) {
+                                        IdleLoem(
+                                            state = state,
+                                            isHungry = vitals.hunger >= HUNGRY_EXPRESSION_THRESHOLD,
+                                            isTired = isSleeping,
+                                            debugSpritePreview = debugSpritePreview,
+                                        )
+                                        if (isSleeping && state.teddyPlacedForSleep) {
+                                            FloatingSleepTeddy(
+                                                modifier = Modifier
+                                                    .align(Alignment.TopCenter)
+                                                    .clickable(onClick = onRemoveSleepTeddy),
+                                            )
+                                        }
+                                    }
+                                }
+                            } else {
+                                LoemEgg()
+                            }
                         }
                     }
                 }
             }
+        }
+        if (state.isHatched(nowMillis)) {
+            Spacer(Modifier.height(10.dp))
+            HomeHungerIndicator(
+                hunger = vitals.hunger,
+                modifier = Modifier.fillMaxWidth(),
+            )
         }
     }
 
@@ -590,25 +642,69 @@ private fun HomeScreen(
 }
 
 @Composable
+private fun HomeHungerIndicator(
+    hunger: Float,
+    modifier: Modifier = Modifier,
+) {
+    val indicatorColor = when {
+        hunger >= 75f -> Color(0xFFC3423F)
+        hunger >= 45f -> Color(0xFFE39A36)
+        else -> MaterialTheme.colorScheme.primary
+    }
+    Card(modifier = modifier) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 9.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(30.dp)
+                    .background(indicatorColor.copy(alpha = 0.16f), RoundedCornerShape(50)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Restaurant,
+                    contentDescription = "Füttern",
+                    modifier = Modifier.size(17.dp),
+                    tint = indicatorColor,
+                )
+            }
+            Column(modifier = Modifier.weight(1f)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("Hunger", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
+                    Text("${hunger.toInt()} %", style = MaterialTheme.typography.labelMedium)
+                }
+                LinearProgressIndicator(
+                    progress = { hunger / 100f },
+                    modifier = Modifier.fillMaxWidth().height(6.dp),
+                    color = indicatorColor,
+                    trackColor = MaterialTheme.colorScheme.surfaceContainer,
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun DraggableSleepTeddy(
     enabled: Boolean,
-    placed: Boolean,
     onDropped: () -> Unit,
 ) {
     var dragX by remember { mutableFloatStateOf(0f) }
     var dragY by remember { mutableFloatStateOf(0f) }
     Image(
         painter = painterResource(R.drawable.item_sleep_teddy),
-        contentDescription = if (placed) "Teddy liegt beim Löm" else "Schlaf-Teddy zum Löm ziehen",
+        contentDescription = "Schlaf-Teddy zum Löm ziehen",
         modifier = Modifier.size(54.dp)
             .graphicsLayer {
                 translationX = dragX
                 translationY = dragY
-                alpha = when {
-                    placed -> 0.35f
-                    enabled -> 1f
-                    else -> 0.5f
-                }
+                alpha = if (enabled) 1f else 0.5f
                 scaleX = if (dragY > 35f) 1.12f else 1f
                 scaleY = if (dragY > 35f) 1.12f else 1f
             }
@@ -1023,344 +1119,24 @@ private fun BattleSequence(
     } else {
         0f
     }
-    val isArmageddonSerpent =
-        state.evolution >= 3 && state.evolutionPath == EvolutionPath.SERPENT
-    val isFemaleArmageddonSerpent =
-        isArmageddonSerpent && state.gender == LoemGender.FEMALE
-    val isSerpent =
-        state.evolution >= 2 &&
-            state.evolutionPath == EvolutionPath.SERPENT &&
-            !isArmageddonSerpent
-    val isGloomWizard =
-        state.evolution >= 3 && state.evolutionPath == EvolutionPath.BAD
-    val isFemaleGloomWizard = isGloomWizard && state.gender == LoemGender.FEMALE
-    val isPoop =
-        state.evolution >= 2 && state.evolutionPath == EvolutionPath.BAD && !isGloomWizard
-    val isWartEmperor =
-        state.evolution >= 3 &&
-            state.evolutionPath == EvolutionPath.MUD_TOAD
-    val isFemaleWartEmperor = isWartEmperor && state.gender == LoemGender.FEMALE
-    val isMudToad =
-        state.evolution >= 2 &&
-            state.evolutionPath == EvolutionPath.MUD_TOAD &&
-            !isWartEmperor
-    val goodFamily = state.evolutionPath == EvolutionPath.GOOD
-    val isGoodFirstEvolution = state.evolution == 1 && goodFamily
-    val isStormkaiser = state.evolution >= 3 && goodFamily
-    val isFemaleStormkaiser = isStormkaiser && state.gender == LoemGender.FEMALE
-    val isMajesticGood = state.evolution >= 2 && goodFamily && !isStormkaiser
-    val stormkaiserIdleResource = if (isFemaleStormkaiser) {
-        R.drawable.loem_stormkaiser_female_idle_sheet
-    } else {
-        R.drawable.loem_stormkaiser_idle_sheet
+    val visualState = when (phase) {
+        BattleAnimationPhase.ATTACK ->
+            if (isFinalRound && result.won) LoemVisualState.DOUBLE_ATTACK else LoemVisualState.ATTACK
+        BattleAnimationPhase.HIT ->
+            if (isFinalRound && !result.won) LoemVisualState.DOUBLE_HIT else LoemVisualState.HIT
+        BattleAnimationPhase.VICTORY -> LoemVisualState.VICTORY
+        BattleAnimationPhase.RESULT_HOLD ->
+            if (result.won) LoemVisualState.VICTORY else LoemVisualState.DOUBLE_HIT
+        BattleAnimationPhase.PAUSE,
+        BattleAnimationPhase.BRACE,
+        -> LoemVisualState.IDLE
     }
-    val stormkaiserAttackResource = if (isFemaleStormkaiser) {
-        R.drawable.loem_stormkaiser_female_battle_attack_sheet
-    } else {
-        R.drawable.loem_stormkaiser_battle_attack_sheet
-    }
-    val stormkaiserHitResource = if (isFemaleStormkaiser) {
-        R.drawable.loem_stormkaiser_female_battle_hit_sheet
-    } else {
-        R.drawable.loem_stormkaiser_battle_hit_sheet
-    }
-    val stormkaiserDoubleAttackResource = if (isFemaleStormkaiser) {
-        R.drawable.loem_stormkaiser_female_battle_double_attack_sheet
-    } else {
-        R.drawable.loem_stormkaiser_battle_double_attack_sheet
-    }
-    val stormkaiserDoubleHitResource = if (isFemaleStormkaiser) {
-        R.drawable.loem_stormkaiser_female_battle_double_hit_sheet
-    } else {
-        R.drawable.loem_stormkaiser_battle_double_hit_sheet
-    }
-    val stormkaiserVictoryResource = if (isFemaleStormkaiser) {
-        R.drawable.loem_stormkaiser_female_battle_victory_sheet
-    } else {
-        R.drawable.loem_stormkaiser_battle_victory_sheet
-    }
-    val wartEmperorIdleResource = if (isFemaleWartEmperor) {
-        R.drawable.loem_wart_emperor_female_idle_sheet
-    } else {
-        R.drawable.loem_wart_emperor_male_idle_sheet
-    }
-    val wartEmperorAttackResource = if (isFemaleWartEmperor) {
-        R.drawable.loem_wart_emperor_female_battle_attack_sheet
-    } else {
-        R.drawable.loem_wart_emperor_male_battle_attack_sheet
-    }
-    val wartEmperorHitResource = if (isFemaleWartEmperor) {
-        R.drawable.loem_wart_emperor_female_battle_hit_sheet
-    } else {
-        R.drawable.loem_wart_emperor_male_battle_hit_sheet
-    }
-    val wartEmperorDoubleAttackResource = if (isFemaleWartEmperor) {
-        R.drawable.loem_wart_emperor_female_battle_double_attack_sheet
-    } else {
-        R.drawable.loem_wart_emperor_male_battle_double_attack_sheet
-    }
-    val wartEmperorDoubleHitResource = if (isFemaleWartEmperor) {
-        R.drawable.loem_wart_emperor_female_battle_double_hit_sheet
-    } else {
-        R.drawable.loem_wart_emperor_male_battle_double_hit_sheet
-    }
-    val wartEmperorVictoryResource = if (isFemaleWartEmperor) {
-        R.drawable.loem_wart_emperor_female_battle_victory_sheet
-    } else {
-        R.drawable.loem_wart_emperor_male_battle_victory_sheet
-    }
-    val armageddonPrefixFemale = isFemaleArmageddonSerpent
-    val armageddonIdleResource = if (armageddonPrefixFemale) {
-        R.drawable.loem_armageddon_serpent_female_idle_sheet
-    } else {
-        R.drawable.loem_armageddon_serpent_male_idle_sheet
-    }
-    val armageddonAttackResource = if (armageddonPrefixFemale) {
-        R.drawable.loem_armageddon_serpent_female_battle_attack_sheet
-    } else {
-        R.drawable.loem_armageddon_serpent_male_battle_attack_sheet
-    }
-    val armageddonHitResource = if (armageddonPrefixFemale) {
-        R.drawable.loem_armageddon_serpent_female_battle_hit_sheet
-    } else {
-        R.drawable.loem_armageddon_serpent_male_battle_hit_sheet
-    }
-    val armageddonDoubleAttackResource = if (armageddonPrefixFemale) {
-        R.drawable.loem_armageddon_serpent_female_battle_double_attack_sheet
-    } else {
-        R.drawable.loem_armageddon_serpent_male_battle_double_attack_sheet
-    }
-    val armageddonDoubleHitResource = if (armageddonPrefixFemale) {
-        R.drawable.loem_armageddon_serpent_female_battle_double_hit_sheet
-    } else {
-        R.drawable.loem_armageddon_serpent_male_battle_double_hit_sheet
-    }
-    val armageddonVictoryResource = if (armageddonPrefixFemale) {
-        R.drawable.loem_armageddon_serpent_female_battle_victory_sheet
-    } else {
-        R.drawable.loem_armageddon_serpent_male_battle_victory_sheet
-    }
-    val gloomWizardIdleResource = if (isFemaleGloomWizard) {
-        R.drawable.loem_gloom_wizard_poop_female_idle_sheet
-    } else {
-        R.drawable.loem_gloom_wizard_poop_male_idle_sheet
-    }
-    val gloomWizardAttackResource = if (isFemaleGloomWizard) {
-        R.drawable.loem_gloom_wizard_poop_female_battle_attack_sheet
-    } else {
-        R.drawable.loem_gloom_wizard_poop_male_battle_attack_sheet
-    }
-    val gloomWizardHitResource = if (isFemaleGloomWizard) {
-        R.drawable.loem_gloom_wizard_poop_female_battle_hit_sheet
-    } else {
-        R.drawable.loem_gloom_wizard_poop_male_battle_hit_sheet
-    }
-    val gloomWizardDoubleAttackResource = if (isFemaleGloomWizard) {
-        R.drawable.loem_gloom_wizard_poop_female_battle_double_attack_sheet
-    } else {
-        R.drawable.loem_gloom_wizard_poop_male_battle_double_attack_sheet
-    }
-    val gloomWizardDoubleHitResource = if (isFemaleGloomWizard) {
-        R.drawable.loem_gloom_wizard_poop_female_battle_double_hit_sheet
-    } else {
-        R.drawable.loem_gloom_wizard_poop_male_battle_double_hit_sheet
-    }
-    val gloomWizardVictoryResource = if (isFemaleGloomWizard) {
-        R.drawable.loem_gloom_wizard_poop_female_battle_victory_sheet
-    } else {
-        R.drawable.loem_gloom_wizard_poop_male_battle_victory_sheet
-    }
-    val resultSpriteResource = when {
-        isGloomWizard && result.won -> gloomWizardVictoryResource
-        isGloomWizard -> gloomWizardDoubleHitResource
-        isArmageddonSerpent && result.won -> armageddonVictoryResource
-        isArmageddonSerpent -> armageddonDoubleHitResource
-        isWartEmperor && result.won -> wartEmperorVictoryResource
-        isWartEmperor -> wartEmperorDoubleHitResource
-        isMudToad && result.won -> R.drawable.loem_mud_toad_battle_victory_sheet
-        isMudToad -> R.drawable.loem_mud_toad_battle_double_hit_sheet
-        isPoop && result.won -> R.drawable.loem_poop_battle_victory_sheet
-        isPoop -> R.drawable.loem_poop_battle_double_hit_sheet
-        isSerpent && result.won -> R.drawable.loem_serpent_battle_victory_sheet
-        isSerpent -> R.drawable.loem_serpent_battle_double_hit_sheet
-        isStormkaiser && result.won -> stormkaiserVictoryResource
-        isStormkaiser -> stormkaiserDoubleHitResource
-        isMajesticGood && result.won -> R.drawable.loem_wing_evolution_battle_victory_sheet
-        isMajesticGood -> R.drawable.loem_wing_evolution_battle_double_hit_sheet
-        isGoodFirstEvolution && result.won -> R.drawable.loem_good_battle_victory_sheet
-        isGoodFirstEvolution -> R.drawable.loem_good_battle_double_hit_sheet
-        goodFamily -> R.drawable.loem_good_evolution_sheet
-        else -> R.drawable.loem_bad_evolution_sheet
-    }
-    val spriteResource = when {
-        phase == BattleAnimationPhase.RESULT_HOLD -> resultSpriteResource
-        isGloomWizard && phase == BattleAnimationPhase.VICTORY ->
-            gloomWizardVictoryResource
-        isGloomWizard && phase == BattleAnimationPhase.ATTACK && isFinalRound && result.won ->
-            gloomWizardDoubleAttackResource
-        isGloomWizard && phase == BattleAnimationPhase.ATTACK ->
-            gloomWizardAttackResource
-        isGloomWizard && phase == BattleAnimationPhase.HIT && isFinalRound && !result.won ->
-            gloomWizardDoubleHitResource
-        isGloomWizard && phase == BattleAnimationPhase.HIT ->
-            gloomWizardHitResource
-        isGloomWizard -> gloomWizardIdleResource
-        isArmageddonSerpent && phase == BattleAnimationPhase.VICTORY ->
-            armageddonVictoryResource
-        isArmageddonSerpent && phase == BattleAnimationPhase.ATTACK && isFinalRound && result.won ->
-            armageddonDoubleAttackResource
-        isArmageddonSerpent && phase == BattleAnimationPhase.ATTACK ->
-            armageddonAttackResource
-        isArmageddonSerpent && phase == BattleAnimationPhase.HIT && isFinalRound && !result.won ->
-            armageddonDoubleHitResource
-        isArmageddonSerpent && phase == BattleAnimationPhase.HIT ->
-            armageddonHitResource
-        isArmageddonSerpent -> armageddonIdleResource
-        isWartEmperor && phase == BattleAnimationPhase.VICTORY ->
-            wartEmperorVictoryResource
-        isWartEmperor && phase == BattleAnimationPhase.ATTACK && isFinalRound && result.won ->
-            wartEmperorDoubleAttackResource
-        isWartEmperor && phase == BattleAnimationPhase.ATTACK ->
-            wartEmperorAttackResource
-        isWartEmperor && phase == BattleAnimationPhase.HIT && isFinalRound && !result.won ->
-            wartEmperorDoubleHitResource
-        isWartEmperor && phase == BattleAnimationPhase.HIT ->
-            wartEmperorHitResource
-        isWartEmperor -> wartEmperorIdleResource
-        isMudToad && phase == BattleAnimationPhase.VICTORY ->
-            R.drawable.loem_mud_toad_battle_victory_sheet
-        isMudToad && phase == BattleAnimationPhase.ATTACK && isFinalRound && result.won ->
-            R.drawable.loem_mud_toad_battle_double_attack_sheet
-        isMudToad && phase == BattleAnimationPhase.ATTACK ->
-            R.drawable.loem_mud_toad_battle_attack_sheet
-        isMudToad && phase == BattleAnimationPhase.HIT && isFinalRound && !result.won ->
-            R.drawable.loem_mud_toad_battle_double_hit_sheet
-        isMudToad && phase == BattleAnimationPhase.HIT ->
-            R.drawable.loem_mud_toad_battle_hit_sheet
-        isMudToad -> R.drawable.loem_mud_toad_idle_sheet
-        isPoop && phase == BattleAnimationPhase.VICTORY ->
-            R.drawable.loem_poop_battle_victory_sheet
-        isPoop && phase == BattleAnimationPhase.ATTACK && isFinalRound && result.won ->
-            R.drawable.loem_poop_battle_double_attack_sheet
-        isPoop && phase == BattleAnimationPhase.ATTACK ->
-            R.drawable.loem_poop_battle_attack_sheet
-        isPoop && phase == BattleAnimationPhase.HIT && isFinalRound && !result.won ->
-            R.drawable.loem_poop_battle_double_hit_sheet
-        isPoop && phase == BattleAnimationPhase.HIT ->
-            R.drawable.loem_poop_battle_hit_sheet
-        isPoop -> R.drawable.loem_poop_evolution_idle_sheet
-        isSerpent && phase == BattleAnimationPhase.VICTORY ->
-            R.drawable.loem_serpent_battle_victory_sheet
-        isSerpent && phase == BattleAnimationPhase.ATTACK && isFinalRound && result.won ->
-            R.drawable.loem_serpent_battle_double_attack_sheet
-        isSerpent && phase == BattleAnimationPhase.ATTACK -> R.drawable.loem_serpent_battle_attack_sheet
-        isSerpent && phase == BattleAnimationPhase.HIT && isFinalRound && !result.won ->
-            R.drawable.loem_serpent_battle_double_hit_sheet
-        isSerpent && phase == BattleAnimationPhase.HIT -> R.drawable.loem_serpent_battle_hit_sheet
-        isSerpent -> R.drawable.loem_serpent_evolution_idle_sheet
-        isStormkaiser && phase == BattleAnimationPhase.VICTORY ->
-            stormkaiserVictoryResource
-        isStormkaiser && phase == BattleAnimationPhase.ATTACK && isFinalRound && result.won ->
-            stormkaiserDoubleAttackResource
-        isStormkaiser && phase == BattleAnimationPhase.ATTACK ->
-            stormkaiserAttackResource
-        isStormkaiser && phase == BattleAnimationPhase.HIT && isFinalRound && !result.won ->
-            stormkaiserDoubleHitResource
-        isStormkaiser && phase == BattleAnimationPhase.HIT ->
-            stormkaiserHitResource
-        isStormkaiser -> stormkaiserIdleResource
-        isMajesticGood && phase == BattleAnimationPhase.VICTORY ->
-            R.drawable.loem_wing_evolution_battle_victory_sheet
-        isMajesticGood && phase == BattleAnimationPhase.ATTACK && isFinalRound && result.won ->
-            R.drawable.loem_wing_evolution_battle_double_attack_sheet
-        isMajesticGood && phase == BattleAnimationPhase.ATTACK ->
-            R.drawable.loem_wing_evolution_battle_attack_sheet
-        isMajesticGood && phase == BattleAnimationPhase.HIT && isFinalRound && !result.won ->
-            R.drawable.loem_wing_evolution_battle_double_hit_sheet
-        isMajesticGood && phase == BattleAnimationPhase.HIT ->
-            R.drawable.loem_wing_evolution_battle_hit_sheet
-        isMajesticGood -> R.drawable.loem_wing_evolution_idle_sheet
-        isGoodFirstEvolution && phase == BattleAnimationPhase.VICTORY ->
-            R.drawable.loem_good_battle_victory_sheet
-        isGoodFirstEvolution && phase == BattleAnimationPhase.ATTACK && isFinalRound && result.won ->
-            R.drawable.loem_good_battle_double_attack_sheet
-        isGoodFirstEvolution && phase == BattleAnimationPhase.ATTACK ->
-            R.drawable.loem_good_battle_attack_sheet
-        isGoodFirstEvolution && phase == BattleAnimationPhase.HIT && isFinalRound && !result.won ->
-            R.drawable.loem_good_battle_double_hit_sheet
-        isGoodFirstEvolution && phase == BattleAnimationPhase.HIT ->
-            R.drawable.loem_good_battle_hit_sheet
-        goodFamily -> R.drawable.loem_good_evolution_sheet
-        else -> R.drawable.loem_bad_evolution_sheet
-    }
-    val stableFrames = when {
-        phase == BattleAnimationPhase.RESULT_HOLD && isGloomWizard ->
-            List(6) { GLOOM_WIZARD_STATE_FRAMES.last() }
-        phase == BattleAnimationPhase.RESULT_HOLD && isArmageddonSerpent ->
-            List(6) { ARMAGEDDON_SERPENT_STATE_FRAMES.last() }
-        phase == BattleAnimationPhase.RESULT_HOLD && isWartEmperor ->
-            List(6) { WART_EMPEROR_STATE_FRAMES.last() }
-        phase == BattleAnimationPhase.RESULT_HOLD && isMudToad ->
-            List(6) { MUD_TOAD_STATE_FRAMES.last() }
-        phase == BattleAnimationPhase.RESULT_HOLD && isPoop ->
-            List(6) { POOP_BATTLE_FRAMES.last() }
-        phase == BattleAnimationPhase.RESULT_HOLD && (isSerpent || isGoodFirstEvolution) ->
-            List(6) { (if (isSerpent) SERPENT_BATTLE_FRAMES else GOOD_BATTLE_FRAMES).last() }
-        phase == BattleAnimationPhase.RESULT_HOLD && isStormkaiser ->
-            List(6) { STORMKAISER_STATE_FRAMES.last() }
-        phase == BattleAnimationPhase.RESULT_HOLD && isMajesticGood ->
-            List(6) { MAJESTIC_WING_BATTLE_FRAMES.last() }
-        phase == BattleAnimationPhase.RESULT_HOLD && goodFamily ->
-            List(6) { GOOD_EVOLUTION_FRAMES.last() }
-        phase == BattleAnimationPhase.RESULT_HOLD -> List(6) { BAD_EVOLUTION_FRAMES.last() }
-        isGloomWizard -> GLOOM_WIZARD_STATE_FRAMES
-        isArmageddonSerpent -> ARMAGEDDON_SERPENT_STATE_FRAMES
-        isSerpent && (
-            phase == BattleAnimationPhase.ATTACK ||
-                phase == BattleAnimationPhase.HIT ||
-                phase == BattleAnimationPhase.VICTORY
-        ) ->
-            SERPENT_BATTLE_FRAMES
-        isSerpent -> SERPENT_EVOLUTION_IDLE_FRAMES
-        isWartEmperor && (
-            phase == BattleAnimationPhase.ATTACK ||
-                phase == BattleAnimationPhase.HIT ||
-                phase == BattleAnimationPhase.VICTORY
-        ) -> WART_EMPEROR_STATE_FRAMES
-        isWartEmperor -> WART_EMPEROR_STATE_FRAMES
-        isMudToad && (
-            phase == BattleAnimationPhase.ATTACK ||
-                phase == BattleAnimationPhase.HIT ||
-                phase == BattleAnimationPhase.VICTORY
-        ) -> MUD_TOAD_STATE_FRAMES
-        isMudToad -> MUD_TOAD_STATE_FRAMES
-        isPoop && (
-            phase == BattleAnimationPhase.ATTACK ||
-                phase == BattleAnimationPhase.HIT ||
-                phase == BattleAnimationPhase.VICTORY
-        ) -> POOP_BATTLE_FRAMES
-        isPoop -> POOP_STATE_FRAMES
-        isStormkaiser && (
-            phase == BattleAnimationPhase.ATTACK ||
-                phase == BattleAnimationPhase.HIT ||
-                phase == BattleAnimationPhase.VICTORY
-        ) -> STORMKAISER_STATE_FRAMES
-        isStormkaiser -> STORMKAISER_STATE_FRAMES
-        isMajesticGood && (
-            phase == BattleAnimationPhase.ATTACK ||
-                phase == BattleAnimationPhase.HIT ||
-                phase == BattleAnimationPhase.VICTORY
-        ) -> MAJESTIC_WING_BATTLE_FRAMES
-        isMajesticGood -> MAJESTIC_WING_EVOLUTION_FRAMES
-        isGoodFirstEvolution && (
-            phase == BattleAnimationPhase.ATTACK ||
-                phase == BattleAnimationPhase.HIT ||
-                phase == BattleAnimationPhase.VICTORY
-        ) -> GOOD_BATTLE_FRAMES
-        goodFamily -> List(6) { GOOD_EVOLUTION_FRAMES.first() }
-        else -> List(6) { BAD_EVOLUTION_FRAMES.first() }
-    }
-
+    val spritePresentation = LoemSpriteStateMachine.presentation(
+        state = state,
+        visualState = visualState,
+        surface = SpriteSurface.BATTLE,
+        holdLastFrame = phase == BattleAnimationPhase.RESULT_HOLD,
+    )
     Column(
         modifier = Modifier.fillMaxSize().padding(20.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -1400,26 +1176,9 @@ private fun BattleSequence(
                 },
             ) {
                 LoemSprite(
-                    evolution = 1,
+                    presentation = spritePresentation,
                     color = state.color,
-                    spriteResource = spriteResource,
-                    frames = stableFrames,
-                    loop = phase != BattleAnimationPhase.RESULT_HOLD,
                     animationKey = if (phase == BattleAnimationPhase.RESULT_HOLD) 1 else 0,
-                    sizeDp = when {
-                        isArmageddonSerpent -> 305
-                        isGloomWizard -> 295
-                        isWartEmperor -> 295
-                        isStormkaiser -> 295
-                        isMajesticGood -> 275
-                        else -> 245
-                    },
-                    frameDurationMillis = when {
-                        isPoop || isGloomWizard -> 300L
-                        isArmageddonSerpent || isSerpent || isGoodFirstEvolution || isMajesticGood ||
-                            isStormkaiser || isWartEmperor -> 330L
-                        else -> 180L
-                    },
                 )
             }
 
@@ -1521,6 +1280,58 @@ private fun elementColor(element: LoemElement): Color = when (element) {
     LoemElement.WATER -> Color(0xFF3FA9F5)
     LoemElement.WIND -> Color(0xFFD9F5F2)
     LoemElement.EARTH -> Color(0xFF8B633D)
+}
+
+private class PoopSoundPlayer(context: android.content.Context) {
+    private val soundPool = SoundPool.Builder()
+        .setMaxStreams(2)
+        .setAudioAttributes(
+            AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_GAME)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                .build(),
+        )
+        .build()
+    private val loadedSounds = mutableSetOf<Int>()
+    private var pendingSound: Int? = null
+    private var flush = 0
+    private var fart = 0
+
+    init {
+        soundPool.setOnLoadCompleteListener { pool, soundId, status ->
+            if (status == 0) {
+                loadedSounds += soundId
+                if (pendingSound == soundId) {
+                    playLoaded(pool, soundId)
+                    pendingSound = null
+                }
+            }
+        }
+        flush = soundPool.load(context, R.raw.toilet_flush, 1)
+        fart = soundPool.load(context, R.raw.poop_fart, 1)
+    }
+
+    fun playFlush() = play(flush)
+
+    fun playFart() = play(fart)
+
+    private fun play(sound: Int) {
+        if (sound in loadedSounds) {
+            playLoaded(soundPool, sound)
+        } else {
+            pendingSound = sound
+        }
+    }
+
+    private fun playLoaded(pool: SoundPool, sound: Int) {
+        val volume = if (sound == fart) 0.88f else 0.82f
+        pool.play(sound, volume, volume, 1, 0, 1f)
+    }
+
+    fun release() {
+        pendingSound = null
+        soundPool.release()
+    }
 }
 
 private class BattleSoundPlayer(context: android.content.Context) {
@@ -1856,12 +1667,22 @@ private fun BattleScreen(
                     result.localElementModifier < 1f -> "Elementnachteil"
                     else -> "Elemente neutral"
                 }
-                Text(
-                    "Gegen ${result.opponentName}\n" +
-                        "${"%.1f".format(result.localPower)} : " +
-                        "${"%.1f".format(result.opponentPower)}\n$elementText\n" +
-                        "Gewinnchance: ${"%.1f".format(result.localWinChance * 100)} %",
-                )
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        "Gegen ${result.opponentName}\n" +
+                            "${"%.1f".format(result.localPower)} : " +
+                            "${"%.1f".format(result.opponentPower)}\n$elementText\n" +
+                            "Gewinnchance: ${"%.1f".format(result.localWinChance * 100)} %",
+                    )
+                    if (result.won) {
+                        AnimatedBattleExperienceReward(
+                            eventId = event.id,
+                            previousExperience = event.previousBattleExperience,
+                            earnedExperience = event.earnedBattleExperience,
+                            levelCap = state.battleLevelCap,
+                        )
+                    }
+                }
             },
             confirmButton = {
                 TextButton(onClick = { onDismissResult(event.id) }) { Text("Okay") }
@@ -1923,201 +1744,31 @@ private fun IdleLoem(
     isTired: Boolean = false,
     debugSpritePreview: DebugSpritePreview? = null,
 ) {
-    val isStormkaiser =
-        state.evolution >= 3 && state.evolutionPath == EvolutionPath.GOOD
-    val isFemaleStormkaiser = isStormkaiser && state.gender == LoemGender.FEMALE
-    val isMajesticGood =
-        state.evolution >= 2 && state.evolutionPath == EvolutionPath.GOOD && !isStormkaiser
-    val isArmageddonSerpent =
-        state.evolution >= 3 && state.evolutionPath == EvolutionPath.SERPENT
-    val isFemaleArmageddonSerpent =
-        isArmageddonSerpent && state.gender == LoemGender.FEMALE
-    val isSerpent =
-        state.evolution >= 2 &&
-            state.evolutionPath == EvolutionPath.SERPENT &&
-            !isArmageddonSerpent
-    val isGloomWizard =
-        state.evolution >= 3 && state.evolutionPath == EvolutionPath.BAD
-    val isFemaleGloomWizard = isGloomWizard && state.gender == LoemGender.FEMALE
-    val isPoop =
-        state.evolution >= 2 && state.evolutionPath == EvolutionPath.BAD && !isGloomWizard
-    val isWartEmperor =
-        state.evolution >= 3 &&
-            state.evolutionPath == EvolutionPath.MUD_TOAD
-    val isFemaleWartEmperor = isWartEmperor && state.gender == LoemGender.FEMALE
-    val isMudToad =
-        state.evolution >= 2 &&
-            state.evolutionPath == EvolutionPath.MUD_TOAD &&
-            !isWartEmperor
-    val spriteResource = debugSpritePreview?.spriteResource ?: when {
-        isFemaleGloomWizard && isTired ->
-            R.drawable.loem_gloom_wizard_poop_female_sleep_sheet
-        isFemaleGloomWizard && isHungry ->
-            R.drawable.loem_gloom_wizard_poop_female_hungry_sheet
-        isFemaleGloomWizard -> R.drawable.loem_gloom_wizard_poop_female_idle_sheet
-        isGloomWizard && isTired -> R.drawable.loem_gloom_wizard_poop_male_sleep_sheet
-        isGloomWizard && isHungry -> R.drawable.loem_gloom_wizard_poop_male_hungry_sheet
-        isGloomWizard -> R.drawable.loem_gloom_wizard_poop_male_idle_sheet
-        isFemaleArmageddonSerpent && isTired ->
-            R.drawable.loem_armageddon_serpent_female_sleep_sheet
-        isFemaleArmageddonSerpent && isHungry ->
-            R.drawable.loem_armageddon_serpent_female_hungry_sheet
-        isFemaleArmageddonSerpent -> R.drawable.loem_armageddon_serpent_female_idle_sheet
-        isArmageddonSerpent && isTired -> R.drawable.loem_armageddon_serpent_male_sleep_sheet
-        isArmageddonSerpent && isHungry -> R.drawable.loem_armageddon_serpent_male_hungry_sheet
-        isArmageddonSerpent -> R.drawable.loem_armageddon_serpent_male_idle_sheet
-        isFemaleWartEmperor && isTired -> R.drawable.loem_wart_emperor_female_sleep_sheet
-        isFemaleWartEmperor && isHungry -> R.drawable.loem_wart_emperor_female_hungry_sheet
-        isFemaleWartEmperor -> R.drawable.loem_wart_emperor_female_idle_sheet
-        isWartEmperor && isTired -> R.drawable.loem_wart_emperor_male_sleep_sheet
-        isWartEmperor && isHungry -> R.drawable.loem_wart_emperor_male_hungry_sheet
-        isWartEmperor -> R.drawable.loem_wart_emperor_male_idle_sheet
-        isMudToad && isTired -> R.drawable.loem_mud_toad_sleep_sheet
-        isMudToad && isHungry -> R.drawable.loem_mud_toad_hungry_sheet
-        isMudToad -> R.drawable.loem_mud_toad_idle_sheet
-        isPoop && isTired -> R.drawable.loem_poop_sleep_sheet
-        isPoop && isHungry -> R.drawable.loem_poop_hungry_sheet
-        isPoop -> R.drawable.loem_poop_evolution_idle_sheet
-        isSerpent && isTired -> R.drawable.loem_serpent_sleep_sheet
-        isSerpent && isHungry -> R.drawable.loem_serpent_hungry_sheet
-        isSerpent -> R.drawable.loem_serpent_evolution_idle_sheet
-        isFemaleStormkaiser && isTired -> R.drawable.loem_stormkaiser_female_sleep_sheet
-        isFemaleStormkaiser && isHungry -> R.drawable.loem_stormkaiser_female_hungry_sheet
-        isFemaleStormkaiser -> R.drawable.loem_stormkaiser_female_idle_sheet
-        isStormkaiser && isTired -> R.drawable.loem_stormkaiser_sleep_sheet
-        isStormkaiser && isHungry -> R.drawable.loem_stormkaiser_hungry_sheet
-        isStormkaiser -> R.drawable.loem_stormkaiser_idle_sheet
-        isTired && isMajesticGood -> R.drawable.loem_wing_evolution_sleep_sheet
-        isTired && state.evolution > 0 && state.evolutionPath == EvolutionPath.GOOD ->
-            R.drawable.loem_good_sleep_sheet
-        isTired && state.evolution > 0 && state.evolutionPath == EvolutionPath.BAD ->
-            R.drawable.loem_bad_sleep_sheet
-        isTired -> R.drawable.loem_sleep_sheet
-        isHungry && isMajesticGood -> R.drawable.loem_wing_evolution_hungry_sheet
-        isHungry && state.evolution > 0 && state.evolutionPath == EvolutionPath.GOOD ->
-            R.drawable.loem_good_hungry_sheet
-        isHungry && state.evolution > 0 && state.evolutionPath == EvolutionPath.BAD ->
-            R.drawable.loem_bad_hungry_sheet
-        isMajesticGood -> R.drawable.loem_wing_evolution_idle_sheet
-        state.evolution > 0 && state.evolutionPath == EvolutionPath.GOOD ->
-            R.drawable.loem_good_evolution_sheet
-        state.evolution > 0 && state.evolutionPath == EvolutionPath.BAD ->
-            R.drawable.loem_bad_evolution_sheet
-        isHungry -> R.drawable.loem_hungry_sheet
-        else -> R.drawable.loem_idle_sheet
-    }
-    val frames = debugSpritePreview?.frames ?: when {
-        isGloomWizard -> GLOOM_WIZARD_STATE_FRAMES
-        isArmageddonSerpent -> ARMAGEDDON_SERPENT_STATE_FRAMES
-        isWartEmperor -> WART_EMPEROR_STATE_FRAMES
-        isMudToad -> MUD_TOAD_STATE_FRAMES
-        isPoop -> POOP_STATE_FRAMES
-        isSerpent -> SERPENT_EVOLUTION_IDLE_FRAMES
-        isStormkaiser -> STORMKAISER_STATE_FRAMES
-        isTired && isMajesticGood -> MAJESTIC_WING_SLEEP_FRAMES
-        isTired && state.evolution > 0 && state.evolutionPath == EvolutionPath.GOOD ->
-            GOOD_SLEEP_FRAMES
-        isTired && state.evolution > 0 && state.evolutionPath == EvolutionPath.BAD ->
-            BAD_SLEEP_FRAMES
-        isTired -> BABY_SLEEP_FRAMES
-        isHungry && isMajesticGood -> MAJESTIC_WING_HUNGRY_FRAMES
-        isHungry && state.evolution > 0 && state.evolutionPath == EvolutionPath.GOOD ->
-            GOOD_HUNGRY_FRAMES
-        isHungry && state.evolution > 0 && state.evolutionPath == EvolutionPath.BAD ->
-            BAD_HUNGRY_FRAMES
-        isMajesticGood -> MAJESTIC_WING_EVOLUTION_FRAMES
-        state.evolution > 0 && state.evolutionPath == EvolutionPath.GOOD -> GOOD_EVOLUTION_FRAMES
-        state.evolution > 0 && state.evolutionPath == EvolutionPath.BAD -> BAD_EVOLUTION_FRAMES
-        else -> IDLE_FRAMES
+    val presentation = if (debugSpritePreview != null) {
+        LoemSpritePresentation(
+            evolution = debugSpritePreview.evolution,
+            clip = SpriteClip(
+                spriteResource = debugSpritePreview.spriteResource,
+                frames = debugSpritePreview.frames,
+                frameDurationMillis = when {
+                    debugSpritePreview.evolution >= 4 -> 100L
+                    debugSpritePreview.evolution >= 3 -> 300L
+                    else -> 180L
+                },
+            ),
+            sizeDp = if (debugSpritePreview.evolution >= 3) 250 else 220,
+        )
+    } else {
+        LoemSpriteStateMachine.presentation(
+            state = state,
+            visualState = LoemSpriteStateMachine.passiveState(isHungry, isTired),
+            surface = SpriteSurface.HOME,
+        )
     }
     LoemSprite(
-        evolution = debugSpritePreview?.evolution ?: state.evolution,
+        presentation = presentation,
         color = state.color,
-        spriteResource = spriteResource,
-        frames = frames,
-        loop = true,
-        sizeDp = if (
-            isArmageddonSerpent || isStormkaiser || isWartEmperor || isGloomWizard ||
-            debugSpritePreview?.evolution == 3
-        ) 250 else 220,
-        subtleBreathing =
-            isTired && state.evolution == 1 && state.evolutionPath == EvolutionPath.BAD,
-        frameDurationMillis = when {
-            isArmageddonSerpent || isStormkaiser || isWartEmperor || isGloomWizard ||
-                debugSpritePreview?.evolution == 3 -> 300L
-            isPoop || isMudToad -> 260L
-            else -> 180L
-        },
     )
-}
-
-@Composable
-private fun LoemSprite(
-    evolution: Int,
-    color: LoemColor,
-    spriteResource: Int,
-    frames: List<SpriteFrame>,
-    loop: Boolean,
-    animationKey: Int = 0,
-    sizeDp: Int = 220,
-    subtleBreathing: Boolean = false,
-    frameDurationMillis: Long = 180L,
-) {
-    val context = LocalContext.current
-    var frame by remember(spriteResource, animationKey) { mutableStateOf(0) }
-    val spriteSheet by androidx.compose.runtime.produceState<androidx.compose.ui.graphics.ImageBitmap?>(
-        initialValue = null,
-        color,
-        spriteResource,
-    ) {
-        value = withContext(Dispatchers.Default) {
-            recolorBody(
-                source = BitmapFactory.decodeResource(context.resources, spriteResource),
-                color = color,
-            ).asImageBitmap()
-        }
-    }
-
-    LaunchedEffect(spriteSheet, spriteResource, animationKey) {
-        if (loop) {
-            while (spriteSheet != null) {
-                delay(frameDurationMillis)
-                frame = (frame + 1) % frames.size
-            }
-        } else {
-            for (nextFrame in 1 until frames.size) {
-                delay(frameDurationMillis)
-                frame = nextFrame
-            }
-        }
-    }
-
-    Canvas(
-        modifier = Modifier.size((sizeDp + evolution * 8).dp),
-    ) {
-        spriteSheet?.let { sheet ->
-            val currentFrame = frames[frame]
-            val breathingScale = if (subtleBreathing) {
-                listOf(1f, 1.006f, 1.012f, 1.012f, 1.006f, 1f)[frame % 6]
-            } else {
-                1f
-            }
-            val destinationHeight = (size.height * breathingScale).toInt()
-            drawImage(
-                image = sheet,
-                srcOffset = androidx.compose.ui.unit.IntOffset(
-                    x = currentFrame.x,
-                    y = currentFrame.y,
-                ),
-                srcSize = androidx.compose.ui.unit.IntSize(currentFrame.width, currentFrame.height),
-                dstOffset = androidx.compose.ui.unit.IntOffset(
-                    x = 0,
-                    y = size.height.toInt() - destinationHeight,
-                ),
-                dstSize = androidx.compose.ui.unit.IntSize(size.width.toInt(), destinationHeight),
-            )
-        }
-    }
 }
 
 private val IDLE_FRAMES = listOf(
@@ -2210,39 +1861,20 @@ private val GOOD_HAM_FRAMES = listOf(
     SpriteFrame(1072, 576, 416, 400),
 )
 
-private val GOOD_MELON_FRAMES = listOf(
-    SpriteFrame(126, 85, 403, 347),
-    SpriteFrame(560, 86, 371, 346),
-    SpriteFrame(996, 87, 369, 346),
-    SpriteFrame(123, 549, 369, 350),
-    SpriteFrame(559, 549, 367, 350),
-    SpriteFrame(996, 547, 366, 352),
+private val LEGACY_STABLE_FEEDING_FRAMES = listOf(
+    SpriteFrame(32, 48, 464, 384),
+    SpriteFrame(544, 48, 464, 384),
+    SpriteFrame(1056, 48, 464, 384),
+    SpriteFrame(32, 560, 464, 384),
+    SpriteFrame(544, 560, 464, 384),
+    SpriteFrame(1056, 560, 464, 384),
 )
 
-private val BAD_HAM_FRAMES = listOf(
-    SpriteFrame(83, 165, 405, 236),
-    SpriteFrame(589, 173, 397, 235),
-    SpriteFrame(1087, 179, 334, 227),
-    SpriteFrame(99, 598, 375, 237),
-    SpriteFrame(596, 596, 359, 237),
-    SpriteFrame(1084, 612, 331, 221),
-)
+private val GOOD_MELON_FRAMES = LEGACY_STABLE_FEEDING_FRAMES
 
-private val BAD_MELON_FRAMES = listOf(
-    SpriteFrame(112, 176, 417, 244),
-    SpriteFrame(590, 177, 379, 243),
-    SpriteFrame(1042, 178, 384, 242),
-    SpriteFrame(125, 586, 343, 244),
-    SpriteFrame(592, 577, 316, 260),
-    SpriteFrame(1050, 601, 349, 236),
-)
+private val BAD_HAM_FRAMES = LEGACY_STABLE_FEEDING_FRAMES
 
-private data class SpriteFrame(
-    val x: Int,
-    val y: Int,
-    val width: Int,
-    val height: Int,
-)
+private val BAD_MELON_FRAMES = LEGACY_STABLE_FEEDING_FRAMES
 
 private data class DebugSpritePreview(
     val displayName: String,
@@ -2279,6 +1911,62 @@ private val STORMKAISER_STATE_FRAMES = listOf(
     SpriteFrame(44, 552, 424, 424),
     SpriteFrame(556, 552, 424, 424),
     SpriteFrame(1068, 552, 424, 424),
+)
+private val ULTRA_COSMIC_STATE_FRAMES = listOf(
+    SpriteFrame(48, 96, 416, 368),
+    SpriteFrame(560, 96, 416, 368),
+    SpriteFrame(1072, 96, 416, 368),
+    SpriteFrame(1584, 96, 416, 368),
+    SpriteFrame(48, 608, 416, 368),
+    SpriteFrame(560, 608, 416, 368),
+    SpriteFrame(1072, 608, 416, 368),
+    SpriteFrame(1584, 608, 416, 368),
+    SpriteFrame(48, 1120, 416, 368),
+    SpriteFrame(560, 1120, 416, 368),
+    SpriteFrame(1072, 1120, 416, 368),
+    SpriteFrame(1584, 1120, 416, 368),
+)
+private val SPACE_RIFT_URTOAD_STATE_FRAMES = listOf(
+    SpriteFrame(48, 176, 416, 288),
+    SpriteFrame(560, 176, 416, 288),
+    SpriteFrame(1072, 176, 416, 288),
+    SpriteFrame(1584, 176, 416, 288),
+    SpriteFrame(48, 688, 416, 288),
+    SpriteFrame(560, 688, 416, 288),
+    SpriteFrame(1072, 688, 416, 288),
+    SpriteFrame(1584, 688, 416, 288),
+    SpriteFrame(48, 1200, 416, 288),
+    SpriteFrame(560, 1200, 416, 288),
+    SpriteFrame(1072, 1200, 416, 288),
+    SpriteFrame(1584, 1200, 416, 288),
+)
+private val SPACE_RIFT_WORLD_SERPENT_STATE_FRAMES = listOf(
+    SpriteFrame(48, 160, 416, 304),
+    SpriteFrame(560, 160, 416, 304),
+    SpriteFrame(1072, 160, 416, 304),
+    SpriteFrame(1584, 160, 416, 304),
+    SpriteFrame(48, 672, 416, 304),
+    SpriteFrame(560, 672, 416, 304),
+    SpriteFrame(1072, 672, 416, 304),
+    SpriteFrame(1584, 672, 416, 304),
+    SpriteFrame(48, 1184, 416, 304),
+    SpriteFrame(560, 1184, 416, 304),
+    SpriteFrame(1072, 1184, 416, 304),
+    SpriteFrame(1584, 1184, 416, 304),
+)
+private val SPACE_RIFT_ARCHMAGE_POOP_STATE_FRAMES = listOf(
+    SpriteFrame(48, 48, 416, 416),
+    SpriteFrame(560, 48, 416, 416),
+    SpriteFrame(1072, 48, 416, 416),
+    SpriteFrame(1584, 48, 416, 416),
+    SpriteFrame(48, 560, 416, 416),
+    SpriteFrame(560, 560, 416, 416),
+    SpriteFrame(1072, 560, 416, 416),
+    SpriteFrame(1584, 560, 416, 416),
+    SpriteFrame(48, 1072, 416, 416),
+    SpriteFrame(560, 1072, 416, 416),
+    SpriteFrame(1072, 1072, 416, 416),
+    SpriteFrame(1584, 1072, 416, 416),
 )
 
 private val ARMAGEDDON_SERPENT_STATE_FRAMES = listOf(
@@ -2341,6 +2029,430 @@ private val WART_EMPEROR_STATE_FRAMES = listOf(
     SpriteFrame(1072, 656, 416, 320),
 )
 
+private enum class LoemVisualState {
+    IDLE,
+    HUNGRY,
+    SLEEP,
+    EAT_MELON,
+    EAT_HAM,
+    ATTACK,
+    HIT,
+    DOUBLE_ATTACK,
+    DOUBLE_HIT,
+    VICTORY,
+}
+
+private enum class SpriteSurface {
+    HOME,
+    FEEDING,
+    BATTLE,
+}
+
+private data class SpriteAsset(
+    val resource: Int,
+    val frames: List<SpriteFrame>,
+)
+
+private data class LoemSpriteSet(
+    val idle: SpriteAsset,
+    val hungry: SpriteAsset,
+    val sleep: SpriteAsset,
+    val melon: SpriteAsset,
+    val ham: SpriteAsset,
+    val attack: SpriteAsset = idle,
+    val hit: SpriteAsset = idle,
+    val doubleAttack: SpriteAsset = attack,
+    val doubleHit: SpriteAsset = hit,
+    val victory: SpriteAsset = idle,
+    val homeFrameDurationMillis: Long = 180L,
+    val feedingFrameDurationMillis: Long = 180L,
+    val battleFrameDurationMillis: Long = 180L,
+    val largeHomeSprite: Boolean = false,
+    val battleSizeDp: Int = 245,
+) {
+    fun assetFor(visualState: LoemVisualState): SpriteAsset = when (visualState) {
+        LoemVisualState.IDLE -> idle
+        LoemVisualState.HUNGRY -> hungry
+        LoemVisualState.SLEEP -> sleep
+        LoemVisualState.EAT_MELON -> melon
+        LoemVisualState.EAT_HAM -> ham
+        LoemVisualState.ATTACK -> attack
+        LoemVisualState.HIT -> hit
+        LoemVisualState.DOUBLE_ATTACK -> doubleAttack
+        LoemVisualState.DOUBLE_HIT -> doubleHit
+        LoemVisualState.VICTORY -> victory
+    }
+}
+
+private fun asset(resource: Int, frames: List<SpriteFrame>) = SpriteAsset(resource, frames)
+private fun staticAsset(resource: Int, frame: SpriteFrame) = SpriteAsset(resource, List(6) { frame })
+
+private object LoemSpriteStateMachine {
+    fun passiveState(isHungry: Boolean, isTired: Boolean): LoemVisualState = when {
+        isTired -> LoemVisualState.SLEEP
+        isHungry -> LoemVisualState.HUNGRY
+        else -> LoemVisualState.IDLE
+    }
+
+    fun feedingState(food: FoodType): LoemVisualState = when (food) {
+        FoodType.MELON -> LoemVisualState.EAT_MELON
+        FoodType.HAM -> LoemVisualState.EAT_HAM
+    }
+
+    fun presentation(
+        state: LoemGameState,
+        visualState: LoemVisualState,
+        surface: SpriteSurface,
+        holdLastFrame: Boolean = false,
+    ): LoemSpritePresentation {
+        val set = spriteSetFor(state)
+        val selectedAsset = set.assetFor(visualState)
+        val duration = when (surface) {
+            SpriteSurface.HOME -> set.homeFrameDurationMillis
+            SpriteSurface.FEEDING -> set.feedingFrameDurationMillis
+            SpriteSurface.BATTLE -> set.battleFrameDurationMillis
+        }
+        val shouldLoop = surface != SpriteSurface.FEEDING && !holdLastFrame
+        val baseClip = SpriteClip(
+            spriteResource = selectedAsset.resource,
+            frames = selectedAsset.frames,
+            frameDurationMillis = duration,
+            loop = shouldLoop,
+            subtleBreathing =
+                surface == SpriteSurface.HOME &&
+                    visualState == LoemVisualState.SLEEP &&
+                    state.evolution == 1 &&
+                    state.evolutionPath == EvolutionPath.BAD,
+        )
+        val clip = if (holdLastFrame) baseClip.holdingLastFrame() else baseClip
+        return LoemSpritePresentation(
+            evolution = if (surface == SpriteSurface.BATTLE) 1 else state.evolution,
+            clip = clip,
+            sizeDp = when (surface) {
+                SpriteSurface.HOME -> if (set.largeHomeSprite) 250 else 220
+                SpriteSurface.FEEDING -> 270
+                SpriteSurface.BATTLE -> set.battleSizeDp
+            },
+        )
+    }
+
+    private fun spriteSetFor(state: LoemGameState): LoemSpriteSet = when {
+        state.evolution >= 4 && state.evolutionPath == EvolutionPath.GOOD -> ULTRA_COSMIC
+        state.evolution >= 4 && state.evolutionPath == EvolutionPath.MUD_TOAD ->
+            SPACE_RIFT_URTOAD
+        state.evolution >= 4 && state.evolutionPath == EvolutionPath.SERPENT ->
+            SPACE_RIFT_WORLD_SERPENT
+        state.evolution >= 4 && state.evolutionPath == EvolutionPath.BAD ->
+            SPACE_RIFT_ARCHMAGE_POOP
+        state.evolution >= 3 && state.evolutionPath == EvolutionPath.BAD ->
+            if (state.gender == LoemGender.FEMALE) GLOOM_WIZARD_FEMALE else GLOOM_WIZARD_MALE
+        state.evolution >= 3 && state.evolutionPath == EvolutionPath.SERPENT ->
+            if (state.gender == LoemGender.FEMALE) ARMAGEDDON_FEMALE else ARMAGEDDON_MALE
+        state.evolution >= 3 && state.evolutionPath == EvolutionPath.MUD_TOAD ->
+            if (state.gender == LoemGender.FEMALE) WART_EMPEROR_FEMALE else WART_EMPEROR_MALE
+        state.evolution >= 3 && state.evolutionPath == EvolutionPath.GOOD ->
+            if (state.gender == LoemGender.FEMALE) STORMKAISER_FEMALE else STORMKAISER_MALE
+        state.evolution >= 2 && state.evolutionPath == EvolutionPath.BAD -> POOP
+        state.evolution >= 2 && state.evolutionPath == EvolutionPath.SERPENT -> SERPENT
+        state.evolution >= 2 && state.evolutionPath == EvolutionPath.MUD_TOAD -> MUD_TOAD
+        state.evolution >= 2 && state.evolutionPath == EvolutionPath.GOOD -> MAJESTIC_WING
+        state.evolution > 0 && state.evolutionPath == EvolutionPath.GOOD -> GOOD
+        state.evolution > 0 && state.evolutionPath == EvolutionPath.BAD -> BAD
+        else -> BABY
+    }
+
+    private val BABY = LoemSpriteSet(
+        idle = asset(R.drawable.loem_idle_sheet, IDLE_FRAMES),
+        hungry = asset(R.drawable.loem_hungry_sheet, IDLE_FRAMES),
+        sleep = asset(R.drawable.loem_sleep_sheet, BABY_SLEEP_FRAMES),
+        melon = asset(R.drawable.loem_melon_sheet, FEEDING_FRAMES),
+        ham = asset(R.drawable.loem_feeding_sheet, FEEDING_FRAMES),
+        attack = staticAsset(R.drawable.loem_bad_evolution_sheet, BAD_EVOLUTION_FRAMES.first()),
+        hit = staticAsset(R.drawable.loem_bad_evolution_sheet, BAD_EVOLUTION_FRAMES.first()),
+        doubleAttack = staticAsset(R.drawable.loem_bad_evolution_sheet, BAD_EVOLUTION_FRAMES.first()),
+        doubleHit = staticAsset(R.drawable.loem_bad_evolution_sheet, BAD_EVOLUTION_FRAMES.first()),
+        victory = staticAsset(R.drawable.loem_bad_evolution_sheet, BAD_EVOLUTION_FRAMES.first()),
+    )
+    private val GOOD = LoemSpriteSet(
+        idle = asset(R.drawable.loem_good_evolution_sheet, GOOD_EVOLUTION_FRAMES),
+        hungry = asset(R.drawable.loem_good_hungry_sheet, GOOD_HUNGRY_FRAMES),
+        sleep = asset(R.drawable.loem_good_sleep_sheet, GOOD_SLEEP_FRAMES),
+        melon = asset(R.drawable.loem_good_melon_sheet, GOOD_MELON_FRAMES),
+        ham = asset(R.drawable.loem_good_ham_sheet, GOOD_HAM_FRAMES),
+        attack = asset(R.drawable.loem_good_battle_attack_sheet, GOOD_BATTLE_FRAMES),
+        hit = asset(R.drawable.loem_good_battle_hit_sheet, GOOD_BATTLE_FRAMES),
+        doubleAttack = asset(R.drawable.loem_good_battle_double_attack_sheet, GOOD_BATTLE_FRAMES),
+        doubleHit = asset(R.drawable.loem_good_battle_double_hit_sheet, GOOD_BATTLE_FRAMES),
+        victory = asset(R.drawable.loem_good_battle_victory_sheet, GOOD_BATTLE_FRAMES),
+        battleFrameDurationMillis = 330L,
+    )
+    private val BAD = LoemSpriteSet(
+        idle = asset(R.drawable.loem_bad_evolution_sheet, BAD_EVOLUTION_FRAMES),
+        hungry = asset(R.drawable.loem_bad_hungry_sheet, BAD_HUNGRY_FRAMES),
+        sleep = asset(R.drawable.loem_bad_sleep_sheet, BAD_SLEEP_FRAMES),
+        melon = asset(R.drawable.loem_bad_melon_sheet, BAD_MELON_FRAMES),
+        ham = asset(R.drawable.loem_bad_ham_sheet, BAD_HAM_FRAMES),
+        attack = staticAsset(R.drawable.loem_bad_evolution_sheet, BAD_EVOLUTION_FRAMES.first()),
+        hit = staticAsset(R.drawable.loem_bad_evolution_sheet, BAD_EVOLUTION_FRAMES.first()),
+        doubleAttack = staticAsset(R.drawable.loem_bad_evolution_sheet, BAD_EVOLUTION_FRAMES.first()),
+        doubleHit = staticAsset(R.drawable.loem_bad_evolution_sheet, BAD_EVOLUTION_FRAMES.first()),
+        victory = staticAsset(R.drawable.loem_bad_evolution_sheet, BAD_EVOLUTION_FRAMES.first()),
+    )
+    private val MAJESTIC_WING = LoemSpriteSet(
+        idle = asset(R.drawable.loem_wing_evolution_idle_sheet, MAJESTIC_WING_EVOLUTION_FRAMES),
+        hungry = asset(R.drawable.loem_wing_evolution_hungry_sheet, MAJESTIC_WING_HUNGRY_FRAMES),
+        sleep = asset(R.drawable.loem_wing_evolution_sleep_sheet, MAJESTIC_WING_SLEEP_FRAMES),
+        melon = asset(R.drawable.loem_wing_evolution_melon_sheet, MAJESTIC_WING_MELON_FRAMES),
+        ham = asset(R.drawable.loem_wing_evolution_ham_sheet, MAJESTIC_WING_HAM_FRAMES),
+        attack = asset(R.drawable.loem_wing_evolution_battle_attack_sheet, MAJESTIC_WING_BATTLE_FRAMES),
+        hit = asset(R.drawable.loem_wing_evolution_battle_hit_sheet, MAJESTIC_WING_BATTLE_FRAMES),
+        doubleAttack = asset(R.drawable.loem_wing_evolution_battle_double_attack_sheet, MAJESTIC_WING_BATTLE_FRAMES),
+        doubleHit = asset(R.drawable.loem_wing_evolution_battle_double_hit_sheet, MAJESTIC_WING_BATTLE_FRAMES),
+        victory = asset(R.drawable.loem_wing_evolution_battle_victory_sheet, MAJESTIC_WING_BATTLE_FRAMES),
+        feedingFrameDurationMillis = 140L,
+        battleFrameDurationMillis = 330L,
+        battleSizeDp = 275,
+    )
+    private val SERPENT = LoemSpriteSet(
+        idle = asset(R.drawable.loem_serpent_evolution_idle_sheet, SERPENT_EVOLUTION_IDLE_FRAMES),
+        hungry = asset(R.drawable.loem_serpent_hungry_sheet, SERPENT_EVOLUTION_IDLE_FRAMES),
+        sleep = asset(R.drawable.loem_serpent_sleep_sheet, SERPENT_EVOLUTION_IDLE_FRAMES),
+        melon = asset(R.drawable.loem_serpent_melon_sheet, SERPENT_EVOLUTION_IDLE_FRAMES),
+        ham = asset(R.drawable.loem_serpent_ham_sheet, SERPENT_EVOLUTION_IDLE_FRAMES),
+        attack = asset(R.drawable.loem_serpent_battle_attack_sheet, SERPENT_BATTLE_FRAMES),
+        hit = asset(R.drawable.loem_serpent_battle_hit_sheet, SERPENT_BATTLE_FRAMES),
+        doubleAttack = asset(R.drawable.loem_serpent_battle_double_attack_sheet, SERPENT_BATTLE_FRAMES),
+        doubleHit = asset(R.drawable.loem_serpent_battle_double_hit_sheet, SERPENT_BATTLE_FRAMES),
+        victory = asset(R.drawable.loem_serpent_battle_victory_sheet, SERPENT_BATTLE_FRAMES),
+        battleFrameDurationMillis = 330L,
+    )
+    private val POOP = LoemSpriteSet(
+        idle = asset(R.drawable.loem_poop_evolution_idle_sheet, POOP_STATE_FRAMES),
+        hungry = asset(R.drawable.loem_poop_hungry_sheet, POOP_STATE_FRAMES),
+        sleep = asset(R.drawable.loem_poop_sleep_sheet, POOP_STATE_FRAMES),
+        melon = asset(R.drawable.loem_poop_melon_sheet, POOP_STATE_FRAMES),
+        ham = asset(R.drawable.loem_poop_ham_sheet, POOP_STATE_FRAMES),
+        attack = asset(R.drawable.loem_poop_battle_attack_sheet, POOP_BATTLE_FRAMES),
+        hit = asset(R.drawable.loem_poop_battle_hit_sheet, POOP_BATTLE_FRAMES),
+        doubleAttack = asset(R.drawable.loem_poop_battle_double_attack_sheet, POOP_BATTLE_FRAMES),
+        doubleHit = asset(R.drawable.loem_poop_battle_double_hit_sheet, POOP_BATTLE_FRAMES),
+        victory = asset(R.drawable.loem_poop_battle_victory_sheet, POOP_BATTLE_FRAMES),
+        homeFrameDurationMillis = 260L,
+        battleFrameDurationMillis = 300L,
+    )
+    private val MUD_TOAD = LoemSpriteSet(
+        idle = asset(R.drawable.loem_mud_toad_idle_sheet, MUD_TOAD_STATE_FRAMES),
+        hungry = asset(R.drawable.loem_mud_toad_hungry_sheet, MUD_TOAD_STATE_FRAMES),
+        sleep = asset(R.drawable.loem_mud_toad_sleep_sheet, MUD_TOAD_STATE_FRAMES),
+        melon = asset(R.drawable.loem_mud_toad_melon_sheet, MUD_TOAD_STATE_FRAMES),
+        ham = asset(R.drawable.loem_mud_toad_ham_sheet, MUD_TOAD_STATE_FRAMES),
+        attack = asset(R.drawable.loem_mud_toad_idle_sheet, MUD_TOAD_STATE_FRAMES),
+        hit = asset(R.drawable.loem_mud_toad_idle_sheet, MUD_TOAD_STATE_FRAMES),
+        doubleAttack = asset(R.drawable.loem_mud_toad_idle_sheet, MUD_TOAD_STATE_FRAMES),
+        doubleHit = asset(R.drawable.loem_mud_toad_idle_sheet, MUD_TOAD_STATE_FRAMES),
+        victory = asset(R.drawable.loem_mud_toad_idle_sheet, MUD_TOAD_STATE_FRAMES),
+        homeFrameDurationMillis = 260L,
+    )
+
+    private fun advancedSet(
+        idle: Int,
+        hungry: Int,
+        sleep: Int,
+        melon: Int,
+        ham: Int,
+        attack: Int,
+        hit: Int,
+        doubleAttack: Int,
+        doubleHit: Int,
+        victory: Int,
+        frames: List<SpriteFrame>,
+        battleDuration: Long,
+        battleSizeDp: Int,
+    ) = LoemSpriteSet(
+        idle = asset(idle, frames),
+        hungry = asset(hungry, frames),
+        sleep = asset(sleep, frames),
+        melon = asset(melon, frames),
+        ham = asset(ham, frames),
+        attack = asset(attack, frames),
+        hit = asset(hit, frames),
+        doubleAttack = asset(doubleAttack, frames),
+        doubleHit = asset(doubleHit, frames),
+        victory = asset(victory, frames),
+        homeFrameDurationMillis = 300L,
+        battleFrameDurationMillis = battleDuration,
+        largeHomeSprite = true,
+        battleSizeDp = battleSizeDp,
+    )
+
+    private fun advancedStaticBattleSet(
+        idle: Int,
+        hungry: Int,
+        sleep: Int,
+        melon: Int,
+        ham: Int,
+        frames: List<SpriteFrame>,
+        battleDuration: Long,
+        battleSizeDp: Int,
+    ) = advancedSet(
+        idle = idle,
+        hungry = hungry,
+        sleep = sleep,
+        melon = melon,
+        ham = ham,
+        attack = idle,
+        hit = idle,
+        doubleAttack = idle,
+        doubleHit = idle,
+        victory = idle,
+        frames = frames,
+        battleDuration = battleDuration,
+        battleSizeDp = battleSizeDp,
+    )
+
+    private val STORMKAISER_MALE = advancedSet(
+        R.drawable.loem_stormkaiser_idle_sheet, R.drawable.loem_stormkaiser_hungry_sheet,
+        R.drawable.loem_stormkaiser_sleep_sheet, R.drawable.loem_stormkaiser_melon_sheet,
+        R.drawable.loem_stormkaiser_ham_sheet, R.drawable.loem_stormkaiser_battle_attack_sheet,
+        R.drawable.loem_stormkaiser_battle_hit_sheet, R.drawable.loem_stormkaiser_battle_double_attack_sheet,
+        R.drawable.loem_stormkaiser_battle_double_hit_sheet, R.drawable.loem_stormkaiser_battle_victory_sheet,
+        STORMKAISER_STATE_FRAMES, 330L, 295,
+    ).copy(feedingFrameDurationMillis = 140L)
+    private val STORMKAISER_FEMALE = advancedStaticBattleSet(
+        R.drawable.loem_stormkaiser_female_idle_sheet, R.drawable.loem_stormkaiser_female_hungry_sheet,
+        R.drawable.loem_stormkaiser_female_sleep_sheet, R.drawable.loem_stormkaiser_female_melon_sheet,
+        R.drawable.loem_stormkaiser_female_ham_sheet,
+        STORMKAISER_STATE_FRAMES, 330L, 295,
+    ).copy(feedingFrameDurationMillis = 140L)
+    private val ULTRA_COSMIC = LoemSpriteSet(
+        idle = asset(R.drawable.loem_ultra_cosmic_idle_sheet, ULTRA_COSMIC_STATE_FRAMES),
+        hungry = asset(R.drawable.loem_ultra_cosmic_hungry_sheet, ULTRA_COSMIC_STATE_FRAMES),
+        sleep = asset(R.drawable.loem_ultra_cosmic_sleep_sheet, ULTRA_COSMIC_STATE_FRAMES),
+        melon = asset(R.drawable.loem_ultra_cosmic_melon_sheet, ULTRA_COSMIC_STATE_FRAMES),
+        ham = asset(R.drawable.loem_ultra_cosmic_ham_sheet, ULTRA_COSMIC_STATE_FRAMES),
+        homeFrameDurationMillis = 100L,
+        feedingFrameDurationMillis = 100L,
+        battleFrameDurationMillis = 100L,
+        largeHomeSprite = true,
+        battleSizeDp = 285,
+    )
+    private val SPACE_RIFT_URTOAD = LoemSpriteSet(
+        idle = asset(R.drawable.loem_space_rift_urtoad_idle_sheet, SPACE_RIFT_URTOAD_STATE_FRAMES),
+        hungry = asset(R.drawable.loem_space_rift_urtoad_hungry_sheet, SPACE_RIFT_URTOAD_STATE_FRAMES),
+        sleep = asset(R.drawable.loem_space_rift_urtoad_sleep_sheet, SPACE_RIFT_URTOAD_STATE_FRAMES),
+        melon = asset(R.drawable.loem_space_rift_urtoad_melon_sheet, SPACE_RIFT_URTOAD_STATE_FRAMES),
+        ham = asset(R.drawable.loem_space_rift_urtoad_ham_sheet, SPACE_RIFT_URTOAD_STATE_FRAMES),
+        homeFrameDurationMillis = 100L,
+        feedingFrameDurationMillis = 100L,
+        battleFrameDurationMillis = 100L,
+        largeHomeSprite = true,
+        battleSizeDp = 290,
+    )
+    private val SPACE_RIFT_WORLD_SERPENT = LoemSpriteSet(
+        idle = asset(
+            R.drawable.loem_space_rift_world_serpent_idle_sheet,
+            SPACE_RIFT_WORLD_SERPENT_STATE_FRAMES,
+        ),
+        hungry = asset(
+            R.drawable.loem_space_rift_world_serpent_hungry_sheet,
+            SPACE_RIFT_WORLD_SERPENT_STATE_FRAMES,
+        ),
+        sleep = asset(
+            R.drawable.loem_space_rift_world_serpent_sleep_sheet,
+            SPACE_RIFT_WORLD_SERPENT_STATE_FRAMES,
+        ),
+        melon = asset(
+            R.drawable.loem_space_rift_world_serpent_melon_sheet,
+            SPACE_RIFT_WORLD_SERPENT_STATE_FRAMES,
+        ),
+        ham = asset(
+            R.drawable.loem_space_rift_world_serpent_ham_sheet,
+            SPACE_RIFT_WORLD_SERPENT_STATE_FRAMES,
+        ),
+        homeFrameDurationMillis = 100L,
+        feedingFrameDurationMillis = 100L,
+        battleFrameDurationMillis = 100L,
+        largeHomeSprite = true,
+        battleSizeDp = 300,
+    )
+    private val SPACE_RIFT_ARCHMAGE_POOP = LoemSpriteSet(
+        idle = asset(
+            R.drawable.loem_space_rift_archmage_poop_idle_sheet,
+            SPACE_RIFT_ARCHMAGE_POOP_STATE_FRAMES,
+        ),
+        hungry = asset(
+            R.drawable.loem_space_rift_archmage_poop_hungry_sheet,
+            SPACE_RIFT_ARCHMAGE_POOP_STATE_FRAMES,
+        ),
+        sleep = asset(
+            R.drawable.loem_space_rift_archmage_poop_sleep_sheet,
+            SPACE_RIFT_ARCHMAGE_POOP_STATE_FRAMES,
+        ),
+        melon = asset(
+            R.drawable.loem_space_rift_archmage_poop_melon_sheet,
+            SPACE_RIFT_ARCHMAGE_POOP_STATE_FRAMES,
+        ),
+        ham = asset(
+            R.drawable.loem_space_rift_archmage_poop_ham_sheet,
+            SPACE_RIFT_ARCHMAGE_POOP_STATE_FRAMES,
+        ),
+        homeFrameDurationMillis = 100L,
+        feedingFrameDurationMillis = 140L,
+        battleFrameDurationMillis = 100L,
+        largeHomeSprite = true,
+        battleSizeDp = 300,
+    )
+    private val WART_EMPEROR_MALE = advancedStaticBattleSet(
+        R.drawable.loem_wart_emperor_male_idle_sheet, R.drawable.loem_wart_emperor_male_hungry_sheet,
+        R.drawable.loem_wart_emperor_male_sleep_sheet, R.drawable.loem_wart_emperor_male_melon_sheet,
+        R.drawable.loem_wart_emperor_male_ham_sheet,
+        WART_EMPEROR_STATE_FRAMES, 330L, 295,
+    )
+    private val WART_EMPEROR_FEMALE = advancedStaticBattleSet(
+        R.drawable.loem_wart_emperor_female_idle_sheet, R.drawable.loem_wart_emperor_female_hungry_sheet,
+        R.drawable.loem_wart_emperor_female_sleep_sheet, R.drawable.loem_wart_emperor_female_melon_sheet,
+        R.drawable.loem_wart_emperor_female_ham_sheet,
+        WART_EMPEROR_STATE_FRAMES, 330L, 295,
+    )
+    private val GLOOM_WIZARD_MALE = advancedStaticBattleSet(
+        R.drawable.loem_gloom_wizard_poop_male_idle_sheet, R.drawable.loem_gloom_wizard_poop_male_hungry_sheet,
+        R.drawable.loem_gloom_wizard_poop_male_sleep_sheet, R.drawable.loem_gloom_wizard_poop_male_melon_sheet,
+        R.drawable.loem_gloom_wizard_poop_male_ham_sheet,
+        GLOOM_WIZARD_STATE_FRAMES, 300L, 295,
+    )
+    private val GLOOM_WIZARD_FEMALE = advancedStaticBattleSet(
+        R.drawable.loem_gloom_wizard_poop_female_idle_sheet, R.drawable.loem_gloom_wizard_poop_female_hungry_sheet,
+        R.drawable.loem_gloom_wizard_poop_female_sleep_sheet, R.drawable.loem_gloom_wizard_poop_female_melon_sheet,
+        R.drawable.loem_gloom_wizard_poop_female_ham_sheet,
+        GLOOM_WIZARD_STATE_FRAMES, 300L, 295,
+    )
+    private val ARMAGEDDON_MALE = advancedStaticBattleSet(
+        R.drawable.loem_armageddon_serpent_male_idle_sheet, R.drawable.loem_armageddon_serpent_male_hungry_sheet,
+        R.drawable.loem_armageddon_serpent_male_sleep_sheet, R.drawable.loem_armageddon_serpent_male_melon_sheet,
+        R.drawable.loem_armageddon_serpent_male_ham_sheet,
+        ARMAGEDDON_SERPENT_STATE_FRAMES, 330L, 305,
+    )
+    private val ARMAGEDDON_FEMALE = advancedStaticBattleSet(
+        R.drawable.loem_armageddon_serpent_female_idle_sheet, R.drawable.loem_armageddon_serpent_female_hungry_sheet,
+        R.drawable.loem_armageddon_serpent_female_sleep_sheet, R.drawable.loem_armageddon_serpent_female_melon_sheet,
+        R.drawable.loem_armageddon_serpent_female_ham_sheet,
+        ARMAGEDDON_SERPENT_STATE_FRAMES, 330L, 305,
+    )
+}
+
+private fun staticBattlePreviews(
+    formName: String,
+    spriteResource: Int,
+    frames: List<SpriteFrame>,
+    evolution: Int,
+): Array<DebugSpritePreview> = arrayOf(
+    DebugSpritePreview("$formName - Angriff", spriteResource, frames, evolution),
+    DebugSpritePreview("$formName - Treffer", spriteResource, frames, evolution),
+    DebugSpritePreview("$formName - Doppelangriff", spriteResource, frames, evolution),
+    DebugSpritePreview("$formName - Doppeltreffer", spriteResource, frames, evolution),
+    DebugSpritePreview("$formName - Sieg", spriteResource, frames, evolution),
+)
+
 private fun debugSpritePreviews(): List<DebugSpritePreview> = listOf(
     DebugSpritePreview("Junges Löm - Idle", R.drawable.loem_idle_sheet, IDLE_FRAMES, 0),
     DebugSpritePreview("Junges Löm - hungrig", R.drawable.loem_hungry_sheet, IDLE_FRAMES, 0),
@@ -2398,11 +2510,31 @@ private fun debugSpritePreviews(): List<DebugSpritePreview> = listOf(
     DebugSpritePreview("Sturmkaiserin-Löm - Schlaf", R.drawable.loem_stormkaiser_female_sleep_sheet, STORMKAISER_STATE_FRAMES, 3),
     DebugSpritePreview("Sturmkaiserin-Löm - Melone", R.drawable.loem_stormkaiser_female_melon_sheet, STORMKAISER_STATE_FRAMES, 3),
     DebugSpritePreview("Sturmkaiserin-Löm - Schinken", R.drawable.loem_stormkaiser_female_ham_sheet, STORMKAISER_STATE_FRAMES, 3),
-    DebugSpritePreview("Sturmkaiserin-Löm - Angriff", R.drawable.loem_stormkaiser_female_battle_attack_sheet, STORMKAISER_STATE_FRAMES, 3),
-    DebugSpritePreview("Sturmkaiserin-Löm - Treffer", R.drawable.loem_stormkaiser_female_battle_hit_sheet, STORMKAISER_STATE_FRAMES, 3),
-    DebugSpritePreview("Sturmkaiserin-Löm - Doppelangriff", R.drawable.loem_stormkaiser_female_battle_double_attack_sheet, STORMKAISER_STATE_FRAMES, 3),
-    DebugSpritePreview("Sturmkaiserin-Löm - Doppeltreffer", R.drawable.loem_stormkaiser_female_battle_double_hit_sheet, STORMKAISER_STATE_FRAMES, 3),
-    DebugSpritePreview("Sturmkaiserin-Löm - Sieg", R.drawable.loem_stormkaiser_female_battle_victory_sheet, STORMKAISER_STATE_FRAMES, 3),
+    *staticBattlePreviews("Sturmkaiserin-Löm", R.drawable.loem_stormkaiser_female_idle_sheet, STORMKAISER_STATE_FRAMES, 3),
+    DebugSpritePreview("Ultra-Raumriss-Löm - Idle", R.drawable.loem_ultra_cosmic_idle_sheet, ULTRA_COSMIC_STATE_FRAMES, 4),
+    DebugSpritePreview("Ultra-Raumriss-Löm - hungrig", R.drawable.loem_ultra_cosmic_hungry_sheet, ULTRA_COSMIC_STATE_FRAMES, 4),
+    DebugSpritePreview("Ultra-Raumriss-Löm - Schlaf", R.drawable.loem_ultra_cosmic_sleep_sheet, ULTRA_COSMIC_STATE_FRAMES, 4),
+    DebugSpritePreview("Ultra-Raumriss-Löm - Melone", R.drawable.loem_ultra_cosmic_melon_sheet, ULTRA_COSMIC_STATE_FRAMES, 4),
+    DebugSpritePreview("Ultra-Raumriss-Löm - Schinken", R.drawable.loem_ultra_cosmic_ham_sheet, ULTRA_COSMIC_STATE_FRAMES, 4),
+    *staticBattlePreviews("Ultra-Raumriss-Löm", R.drawable.loem_ultra_cosmic_idle_sheet, ULTRA_COSMIC_STATE_FRAMES, 4),
+    DebugSpritePreview("Raumriss-Urkröte - Idle", R.drawable.loem_space_rift_urtoad_idle_sheet, SPACE_RIFT_URTOAD_STATE_FRAMES, 4),
+    DebugSpritePreview("Raumriss-Urkröte - hungrig", R.drawable.loem_space_rift_urtoad_hungry_sheet, SPACE_RIFT_URTOAD_STATE_FRAMES, 4),
+    DebugSpritePreview("Raumriss-Urkröte - Schlaf", R.drawable.loem_space_rift_urtoad_sleep_sheet, SPACE_RIFT_URTOAD_STATE_FRAMES, 4),
+    DebugSpritePreview("Raumriss-Urkröte - Melone", R.drawable.loem_space_rift_urtoad_melon_sheet, SPACE_RIFT_URTOAD_STATE_FRAMES, 4),
+    DebugSpritePreview("Raumriss-Urkröte - Schinken", R.drawable.loem_space_rift_urtoad_ham_sheet, SPACE_RIFT_URTOAD_STATE_FRAMES, 4),
+    *staticBattlePreviews("Raumriss-Urkröte", R.drawable.loem_space_rift_urtoad_idle_sheet, SPACE_RIFT_URTOAD_STATE_FRAMES, 4),
+    DebugSpritePreview("Raumriss-Weltschlange - Idle", R.drawable.loem_space_rift_world_serpent_idle_sheet, SPACE_RIFT_WORLD_SERPENT_STATE_FRAMES, 4),
+    DebugSpritePreview("Raumriss-Weltschlange - hungrig", R.drawable.loem_space_rift_world_serpent_hungry_sheet, SPACE_RIFT_WORLD_SERPENT_STATE_FRAMES, 4),
+    DebugSpritePreview("Raumriss-Weltschlange - Schlaf", R.drawable.loem_space_rift_world_serpent_sleep_sheet, SPACE_RIFT_WORLD_SERPENT_STATE_FRAMES, 4),
+    DebugSpritePreview("Raumriss-Weltschlange - Melone", R.drawable.loem_space_rift_world_serpent_melon_sheet, SPACE_RIFT_WORLD_SERPENT_STATE_FRAMES, 4),
+    DebugSpritePreview("Raumriss-Weltschlange - Schinken", R.drawable.loem_space_rift_world_serpent_ham_sheet, SPACE_RIFT_WORLD_SERPENT_STATE_FRAMES, 4),
+    *staticBattlePreviews("Raumriss-Weltschlange", R.drawable.loem_space_rift_world_serpent_idle_sheet, SPACE_RIFT_WORLD_SERPENT_STATE_FRAMES, 4),
+    DebugSpritePreview("Ultra-Armageddon-Raumriss-Erzmagierhaufen-Löm - Idle", R.drawable.loem_space_rift_archmage_poop_idle_sheet, SPACE_RIFT_ARCHMAGE_POOP_STATE_FRAMES, 4),
+    DebugSpritePreview("Ultra-Armageddon-Raumriss-Erzmagierhaufen-Löm - hungrig", R.drawable.loem_space_rift_archmage_poop_hungry_sheet, SPACE_RIFT_ARCHMAGE_POOP_STATE_FRAMES, 4),
+    DebugSpritePreview("Ultra-Armageddon-Raumriss-Erzmagierhaufen-Löm - Schlaf", R.drawable.loem_space_rift_archmage_poop_sleep_sheet, SPACE_RIFT_ARCHMAGE_POOP_STATE_FRAMES, 4),
+    DebugSpritePreview("Ultra-Armageddon-Raumriss-Erzmagierhaufen-Löm - Melone", R.drawable.loem_space_rift_archmage_poop_melon_sheet, SPACE_RIFT_ARCHMAGE_POOP_STATE_FRAMES, 4),
+    DebugSpritePreview("Ultra-Armageddon-Raumriss-Erzmagierhaufen-Löm - Schinken", R.drawable.loem_space_rift_archmage_poop_ham_sheet, SPACE_RIFT_ARCHMAGE_POOP_STATE_FRAMES, 4),
+    *staticBattlePreviews("Ultra-Armageddon-Raumriss-Erzmagierhaufen-Löm", R.drawable.loem_space_rift_archmage_poop_idle_sheet, SPACE_RIFT_ARCHMAGE_POOP_STATE_FRAMES, 4),
     DebugSpritePreview("Flügel-Löm - hungrig", R.drawable.loem_good_hungry_sheet, GOOD_HUNGRY_FRAMES, 1),
     DebugSpritePreview("Flügel-Löm - Schlaf", R.drawable.loem_good_sleep_sheet, GOOD_SLEEP_FRAMES, 1),
     DebugSpritePreview("Flügel-Löm - Melone", R.drawable.loem_good_melon_sheet, GOOD_MELON_FRAMES, 1),
@@ -2422,31 +2554,19 @@ private fun debugSpritePreviews(): List<DebugSpritePreview> = listOf(
     DebugSpritePreview("Matschkröten-Löm - Schlaf", R.drawable.loem_mud_toad_sleep_sheet, MUD_TOAD_STATE_FRAMES, 2),
     DebugSpritePreview("Matschkröten-Löm - Melone", R.drawable.loem_mud_toad_melon_sheet, MUD_TOAD_STATE_FRAMES, 2),
     DebugSpritePreview("Matschkröten-Löm - Schinken", R.drawable.loem_mud_toad_ham_sheet, MUD_TOAD_STATE_FRAMES, 2),
-    DebugSpritePreview("Matschkröten-Löm - Angriff", R.drawable.loem_mud_toad_battle_attack_sheet, MUD_TOAD_STATE_FRAMES, 2),
-    DebugSpritePreview("Matschkröten-Löm - Treffer", R.drawable.loem_mud_toad_battle_hit_sheet, MUD_TOAD_STATE_FRAMES, 2),
-    DebugSpritePreview("Matschkröten-Löm - Doppelangriff", R.drawable.loem_mud_toad_battle_double_attack_sheet, MUD_TOAD_STATE_FRAMES, 2),
-    DebugSpritePreview("Matschkröten-Löm - Doppeltreffer", R.drawable.loem_mud_toad_battle_double_hit_sheet, MUD_TOAD_STATE_FRAMES, 2),
-    DebugSpritePreview("Matschkröten-Löm - Sieg", R.drawable.loem_mud_toad_battle_victory_sheet, MUD_TOAD_STATE_FRAMES, 2),
+    *staticBattlePreviews("Matschkröten-Löm", R.drawable.loem_mud_toad_idle_sheet, MUD_TOAD_STATE_FRAMES, 2),
     DebugSpritePreview("Warzenkaiser-Löm - Idle", R.drawable.loem_wart_emperor_male_idle_sheet, WART_EMPEROR_STATE_FRAMES, 3),
     DebugSpritePreview("Warzenkaiser-Löm - hungrig", R.drawable.loem_wart_emperor_male_hungry_sheet, WART_EMPEROR_STATE_FRAMES, 3),
     DebugSpritePreview("Warzenkaiser-Löm - Schlaf", R.drawable.loem_wart_emperor_male_sleep_sheet, WART_EMPEROR_STATE_FRAMES, 3),
     DebugSpritePreview("Warzenkaiser-Löm - Melone", R.drawable.loem_wart_emperor_male_melon_sheet, WART_EMPEROR_STATE_FRAMES, 3),
     DebugSpritePreview("Warzenkaiser-Löm - Schinken", R.drawable.loem_wart_emperor_male_ham_sheet, WART_EMPEROR_STATE_FRAMES, 3),
-    DebugSpritePreview("Warzenkaiser-Löm - Angriff", R.drawable.loem_wart_emperor_male_battle_attack_sheet, WART_EMPEROR_STATE_FRAMES, 3),
-    DebugSpritePreview("Warzenkaiser-Löm - Treffer", R.drawable.loem_wart_emperor_male_battle_hit_sheet, WART_EMPEROR_STATE_FRAMES, 3),
-    DebugSpritePreview("Warzenkaiser-Löm - Doppelangriff", R.drawable.loem_wart_emperor_male_battle_double_attack_sheet, WART_EMPEROR_STATE_FRAMES, 3),
-    DebugSpritePreview("Warzenkaiser-Löm - Doppeltreffer", R.drawable.loem_wart_emperor_male_battle_double_hit_sheet, WART_EMPEROR_STATE_FRAMES, 3),
-    DebugSpritePreview("Warzenkaiser-Löm - Sieg", R.drawable.loem_wart_emperor_male_battle_victory_sheet, WART_EMPEROR_STATE_FRAMES, 3),
+    *staticBattlePreviews("Warzenkaiser-Löm", R.drawable.loem_wart_emperor_male_idle_sheet, WART_EMPEROR_STATE_FRAMES, 3),
     DebugSpritePreview("Warzenkaiserin-Löm - Idle", R.drawable.loem_wart_emperor_female_idle_sheet, WART_EMPEROR_STATE_FRAMES, 3),
     DebugSpritePreview("Warzenkaiserin-Löm - hungrig", R.drawable.loem_wart_emperor_female_hungry_sheet, WART_EMPEROR_STATE_FRAMES, 3),
     DebugSpritePreview("Warzenkaiserin-Löm - Schlaf", R.drawable.loem_wart_emperor_female_sleep_sheet, WART_EMPEROR_STATE_FRAMES, 3),
     DebugSpritePreview("Warzenkaiserin-Löm - Melone", R.drawable.loem_wart_emperor_female_melon_sheet, WART_EMPEROR_STATE_FRAMES, 3),
     DebugSpritePreview("Warzenkaiserin-Löm - Schinken", R.drawable.loem_wart_emperor_female_ham_sheet, WART_EMPEROR_STATE_FRAMES, 3),
-    DebugSpritePreview("Warzenkaiserin-Löm - Angriff", R.drawable.loem_wart_emperor_female_battle_attack_sheet, WART_EMPEROR_STATE_FRAMES, 3),
-    DebugSpritePreview("Warzenkaiserin-Löm - Treffer", R.drawable.loem_wart_emperor_female_battle_hit_sheet, WART_EMPEROR_STATE_FRAMES, 3),
-    DebugSpritePreview("Warzenkaiserin-Löm - Doppelangriff", R.drawable.loem_wart_emperor_female_battle_double_attack_sheet, WART_EMPEROR_STATE_FRAMES, 3),
-    DebugSpritePreview("Warzenkaiserin-Löm - Doppeltreffer", R.drawable.loem_wart_emperor_female_battle_double_hit_sheet, WART_EMPEROR_STATE_FRAMES, 3),
-    DebugSpritePreview("Warzenkaiserin-Löm - Sieg", R.drawable.loem_wart_emperor_female_battle_victory_sheet, WART_EMPEROR_STATE_FRAMES, 3),
+    *staticBattlePreviews("Warzenkaiserin-Löm", R.drawable.loem_wart_emperor_female_idle_sheet, WART_EMPEROR_STATE_FRAMES, 3),
     DebugSpritePreview("Haufen-Löm - Idle", R.drawable.loem_poop_evolution_idle_sheet, POOP_STATE_FRAMES, 2),
     DebugSpritePreview("Haufen-Löm - hungrig", R.drawable.loem_poop_hungry_sheet, POOP_STATE_FRAMES, 2),
     DebugSpritePreview("Haufen-Löm - Schlaf", R.drawable.loem_poop_sleep_sheet, POOP_STATE_FRAMES, 2),
@@ -2462,41 +2582,25 @@ private fun debugSpritePreviews(): List<DebugSpritePreview> = listOf(
     DebugSpritePreview("Trübsal-Zauberhaufen-Löm - Schlaf", R.drawable.loem_gloom_wizard_poop_male_sleep_sheet, GLOOM_WIZARD_STATE_FRAMES, 3),
     DebugSpritePreview("Trübsal-Zauberhaufen-Löm - Melone", R.drawable.loem_gloom_wizard_poop_male_melon_sheet, GLOOM_WIZARD_STATE_FRAMES, 3),
     DebugSpritePreview("Trübsal-Zauberhaufen-Löm - Schinken", R.drawable.loem_gloom_wizard_poop_male_ham_sheet, GLOOM_WIZARD_STATE_FRAMES, 3),
-    DebugSpritePreview("Trübsal-Zauberhaufen-Löm - Angriff", R.drawable.loem_gloom_wizard_poop_male_battle_attack_sheet, GLOOM_WIZARD_STATE_FRAMES, 3),
-    DebugSpritePreview("Trübsal-Zauberhaufen-Löm - Treffer", R.drawable.loem_gloom_wizard_poop_male_battle_hit_sheet, GLOOM_WIZARD_STATE_FRAMES, 3),
-    DebugSpritePreview("Trübsal-Zauberhaufen-Löm - Doppelangriff", R.drawable.loem_gloom_wizard_poop_male_battle_double_attack_sheet, GLOOM_WIZARD_STATE_FRAMES, 3),
-    DebugSpritePreview("Trübsal-Zauberhaufen-Löm - Doppeltreffer", R.drawable.loem_gloom_wizard_poop_male_battle_double_hit_sheet, GLOOM_WIZARD_STATE_FRAMES, 3),
-    DebugSpritePreview("Trübsal-Zauberhaufen-Löm - Sieg", R.drawable.loem_gloom_wizard_poop_male_battle_victory_sheet, GLOOM_WIZARD_STATE_FRAMES, 3),
+    *staticBattlePreviews("Trübsal-Zauberhaufen-Löm", R.drawable.loem_gloom_wizard_poop_male_idle_sheet, GLOOM_WIZARD_STATE_FRAMES, 3),
     DebugSpritePreview("Trübsal-Zauberhaufen-Lömin - Idle", R.drawable.loem_gloom_wizard_poop_female_idle_sheet, GLOOM_WIZARD_STATE_FRAMES, 3),
     DebugSpritePreview("Trübsal-Zauberhaufen-Lömin - hungrig", R.drawable.loem_gloom_wizard_poop_female_hungry_sheet, GLOOM_WIZARD_STATE_FRAMES, 3),
     DebugSpritePreview("Trübsal-Zauberhaufen-Lömin - Schlaf", R.drawable.loem_gloom_wizard_poop_female_sleep_sheet, GLOOM_WIZARD_STATE_FRAMES, 3),
     DebugSpritePreview("Trübsal-Zauberhaufen-Lömin - Melone", R.drawable.loem_gloom_wizard_poop_female_melon_sheet, GLOOM_WIZARD_STATE_FRAMES, 3),
     DebugSpritePreview("Trübsal-Zauberhaufen-Lömin - Schinken", R.drawable.loem_gloom_wizard_poop_female_ham_sheet, GLOOM_WIZARD_STATE_FRAMES, 3),
-    DebugSpritePreview("Trübsal-Zauberhaufen-Lömin - Angriff", R.drawable.loem_gloom_wizard_poop_female_battle_attack_sheet, GLOOM_WIZARD_STATE_FRAMES, 3),
-    DebugSpritePreview("Trübsal-Zauberhaufen-Lömin - Treffer", R.drawable.loem_gloom_wizard_poop_female_battle_hit_sheet, GLOOM_WIZARD_STATE_FRAMES, 3),
-    DebugSpritePreview("Trübsal-Zauberhaufen-Lömin - Doppelangriff", R.drawable.loem_gloom_wizard_poop_female_battle_double_attack_sheet, GLOOM_WIZARD_STATE_FRAMES, 3),
-    DebugSpritePreview("Trübsal-Zauberhaufen-Lömin - Doppeltreffer", R.drawable.loem_gloom_wizard_poop_female_battle_double_hit_sheet, GLOOM_WIZARD_STATE_FRAMES, 3),
-    DebugSpritePreview("Trübsal-Zauberhaufen-Lömin - Sieg", R.drawable.loem_gloom_wizard_poop_female_battle_victory_sheet, GLOOM_WIZARD_STATE_FRAMES, 3),
+    *staticBattlePreviews("Trübsal-Zauberhaufen-Lömin", R.drawable.loem_gloom_wizard_poop_female_idle_sheet, GLOOM_WIZARD_STATE_FRAMES, 3),
     DebugSpritePreview("Armageddon-Prunkschlangenkaiser-Löm - Idle", R.drawable.loem_armageddon_serpent_male_idle_sheet, ARMAGEDDON_SERPENT_STATE_FRAMES, 3),
     DebugSpritePreview("Armageddon-Prunkschlangenkaiser-Löm - hungrig", R.drawable.loem_armageddon_serpent_male_hungry_sheet, ARMAGEDDON_SERPENT_STATE_FRAMES, 3),
     DebugSpritePreview("Armageddon-Prunkschlangenkaiser-Löm - Schlaf", R.drawable.loem_armageddon_serpent_male_sleep_sheet, ARMAGEDDON_SERPENT_STATE_FRAMES, 3),
     DebugSpritePreview("Armageddon-Prunkschlangenkaiser-Löm - Melone", R.drawable.loem_armageddon_serpent_male_melon_sheet, ARMAGEDDON_SERPENT_STATE_FRAMES, 3),
     DebugSpritePreview("Armageddon-Prunkschlangenkaiser-Löm - Schinken", R.drawable.loem_armageddon_serpent_male_ham_sheet, ARMAGEDDON_SERPENT_STATE_FRAMES, 3),
-    DebugSpritePreview("Armageddon-Prunkschlangenkaiser-Löm - Angriff", R.drawable.loem_armageddon_serpent_male_battle_attack_sheet, ARMAGEDDON_SERPENT_STATE_FRAMES, 3),
-    DebugSpritePreview("Armageddon-Prunkschlangenkaiser-Löm - Treffer", R.drawable.loem_armageddon_serpent_male_battle_hit_sheet, ARMAGEDDON_SERPENT_STATE_FRAMES, 3),
-    DebugSpritePreview("Armageddon-Prunkschlangenkaiser-Löm - Doppelangriff", R.drawable.loem_armageddon_serpent_male_battle_double_attack_sheet, ARMAGEDDON_SERPENT_STATE_FRAMES, 3),
-    DebugSpritePreview("Armageddon-Prunkschlangenkaiser-Löm - Doppeltreffer", R.drawable.loem_armageddon_serpent_male_battle_double_hit_sheet, ARMAGEDDON_SERPENT_STATE_FRAMES, 3),
-    DebugSpritePreview("Armageddon-Prunkschlangenkaiser-Löm - Sieg", R.drawable.loem_armageddon_serpent_male_battle_victory_sheet, ARMAGEDDON_SERPENT_STATE_FRAMES, 3),
+    *staticBattlePreviews("Armageddon-Prunkschlangenkaiser-Löm", R.drawable.loem_armageddon_serpent_male_idle_sheet, ARMAGEDDON_SERPENT_STATE_FRAMES, 3),
     DebugSpritePreview("Armageddon-Prunkschlangenkaiserin-Löm - Idle", R.drawable.loem_armageddon_serpent_female_idle_sheet, ARMAGEDDON_SERPENT_STATE_FRAMES, 3),
     DebugSpritePreview("Armageddon-Prunkschlangenkaiserin-Löm - hungrig", R.drawable.loem_armageddon_serpent_female_hungry_sheet, ARMAGEDDON_SERPENT_STATE_FRAMES, 3),
     DebugSpritePreview("Armageddon-Prunkschlangenkaiserin-Löm - Schlaf", R.drawable.loem_armageddon_serpent_female_sleep_sheet, ARMAGEDDON_SERPENT_STATE_FRAMES, 3),
     DebugSpritePreview("Armageddon-Prunkschlangenkaiserin-Löm - Melone", R.drawable.loem_armageddon_serpent_female_melon_sheet, ARMAGEDDON_SERPENT_STATE_FRAMES, 3),
     DebugSpritePreview("Armageddon-Prunkschlangenkaiserin-Löm - Schinken", R.drawable.loem_armageddon_serpent_female_ham_sheet, ARMAGEDDON_SERPENT_STATE_FRAMES, 3),
-    DebugSpritePreview("Armageddon-Prunkschlangenkaiserin-Löm - Angriff", R.drawable.loem_armageddon_serpent_female_battle_attack_sheet, ARMAGEDDON_SERPENT_STATE_FRAMES, 3),
-    DebugSpritePreview("Armageddon-Prunkschlangenkaiserin-Löm - Treffer", R.drawable.loem_armageddon_serpent_female_battle_hit_sheet, ARMAGEDDON_SERPENT_STATE_FRAMES, 3),
-    DebugSpritePreview("Armageddon-Prunkschlangenkaiserin-Löm - Doppelangriff", R.drawable.loem_armageddon_serpent_female_battle_double_attack_sheet, ARMAGEDDON_SERPENT_STATE_FRAMES, 3),
-    DebugSpritePreview("Armageddon-Prunkschlangenkaiserin-Löm - Doppeltreffer", R.drawable.loem_armageddon_serpent_female_battle_double_hit_sheet, ARMAGEDDON_SERPENT_STATE_FRAMES, 3),
-    DebugSpritePreview("Armageddon-Prunkschlangenkaiserin-Löm - Sieg", R.drawable.loem_armageddon_serpent_female_battle_victory_sheet, ARMAGEDDON_SERPENT_STATE_FRAMES, 3),
+    *staticBattlePreviews("Armageddon-Prunkschlangenkaiserin-Löm", R.drawable.loem_armageddon_serpent_female_idle_sheet, ARMAGEDDON_SERPENT_STATE_FRAMES, 3),
     DebugSpritePreview(
         "Prunkschlangen-Löm - Idle",
         R.drawable.loem_serpent_evolution_idle_sheet,
@@ -2540,7 +2644,7 @@ private fun debugSpritePreviews(): List<DebugSpritePreview> = listOf(
     DebugSpritePreview("Prunkschlangen-Löm - Sieg", R.drawable.loem_serpent_battle_victory_sheet, SERPENT_BATTLE_FRAMES, 2),
 )
 
-private fun recolorBody(source: Bitmap, color: LoemColor): Bitmap {
+internal fun recolorBody(source: Bitmap, color: LoemColor): Bitmap {
     val result = source.copy(Bitmap.Config.ARGB_8888, true)
     val pixels = IntArray(source.width * source.height)
     source.getPixels(pixels, 0, source.width, 0, 0, source.width, source.height)
@@ -2852,15 +2956,14 @@ private fun FeedScreen(
         }
 
         if (isFeeding) {
-            val feedingVisual = feedingVisual(state, selectedFood)
             LoemSprite(
-                evolution = state.evolution,
+                presentation = LoemSpriteStateMachine.presentation(
+                    state = state,
+                    visualState = LoemSpriteStateMachine.feedingState(selectedFood),
+                    surface = SpriteSurface.FEEDING,
+                ),
                 color = state.color,
-                spriteResource = feedingVisual.first,
-                frames = feedingVisual.second,
-                loop = false,
                 animationKey = animationKey,
-                sizeDp = 270,
             )
         } else {
             IdleLoem(
@@ -3021,104 +3124,6 @@ private fun DraggableFood(
         }
         Text(food.displayName, style = MaterialTheme.typography.bodySmall)
     }
-}
-
-private fun feedingVisual(
-    state: LoemGameState,
-    food: FoodType,
-): Pair<Int, List<SpriteFrame>> = when {
-    state.evolution >= 3 &&
-        state.evolutionPath == EvolutionPath.BAD &&
-        state.gender == LoemGender.FEMALE &&
-        food == FoodType.HAM ->
-        R.drawable.loem_gloom_wizard_poop_female_ham_sheet to GLOOM_WIZARD_STATE_FRAMES
-    state.evolution >= 3 &&
-        state.evolutionPath == EvolutionPath.BAD &&
-        state.gender == LoemGender.FEMALE ->
-        R.drawable.loem_gloom_wizard_poop_female_melon_sheet to GLOOM_WIZARD_STATE_FRAMES
-    state.evolution >= 3 &&
-        state.evolutionPath == EvolutionPath.BAD &&
-        food == FoodType.HAM ->
-        R.drawable.loem_gloom_wizard_poop_male_ham_sheet to GLOOM_WIZARD_STATE_FRAMES
-    state.evolution >= 3 && state.evolutionPath == EvolutionPath.BAD ->
-        R.drawable.loem_gloom_wizard_poop_male_melon_sheet to GLOOM_WIZARD_STATE_FRAMES
-    state.evolution >= 3 &&
-        state.evolutionPath == EvolutionPath.SERPENT &&
-        state.gender == LoemGender.FEMALE &&
-        food == FoodType.HAM ->
-        R.drawable.loem_armageddon_serpent_female_ham_sheet to
-            ARMAGEDDON_SERPENT_STATE_FRAMES
-    state.evolution >= 3 &&
-        state.evolutionPath == EvolutionPath.SERPENT &&
-        state.gender == LoemGender.FEMALE ->
-        R.drawable.loem_armageddon_serpent_female_melon_sheet to
-            ARMAGEDDON_SERPENT_STATE_FRAMES
-    state.evolution >= 3 &&
-        state.evolutionPath == EvolutionPath.SERPENT &&
-        food == FoodType.HAM ->
-        R.drawable.loem_armageddon_serpent_male_ham_sheet to
-            ARMAGEDDON_SERPENT_STATE_FRAMES
-    state.evolution >= 3 && state.evolutionPath == EvolutionPath.SERPENT ->
-        R.drawable.loem_armageddon_serpent_male_melon_sheet to
-            ARMAGEDDON_SERPENT_STATE_FRAMES
-    state.evolution >= 3 &&
-        state.evolutionPath == EvolutionPath.MUD_TOAD &&
-        state.gender == LoemGender.FEMALE &&
-        food == FoodType.HAM ->
-        R.drawable.loem_wart_emperor_female_ham_sheet to WART_EMPEROR_STATE_FRAMES
-    state.evolution >= 3 &&
-        state.evolutionPath == EvolutionPath.MUD_TOAD &&
-        state.gender == LoemGender.FEMALE ->
-        R.drawable.loem_wart_emperor_female_melon_sheet to WART_EMPEROR_STATE_FRAMES
-    state.evolution >= 3 &&
-        state.evolutionPath == EvolutionPath.MUD_TOAD &&
-        food == FoodType.HAM ->
-        R.drawable.loem_wart_emperor_male_ham_sheet to WART_EMPEROR_STATE_FRAMES
-    state.evolution >= 3 &&
-        state.evolutionPath == EvolutionPath.MUD_TOAD ->
-        R.drawable.loem_wart_emperor_male_melon_sheet to WART_EMPEROR_STATE_FRAMES
-    state.evolution >= 3 &&
-        state.evolutionPath == EvolutionPath.GOOD &&
-        state.gender == LoemGender.FEMALE &&
-        food == FoodType.HAM ->
-        R.drawable.loem_stormkaiser_female_ham_sheet to STORMKAISER_STATE_FRAMES
-    state.evolution >= 3 &&
-        state.evolutionPath == EvolutionPath.GOOD &&
-        state.gender == LoemGender.FEMALE ->
-        R.drawable.loem_stormkaiser_female_melon_sheet to STORMKAISER_STATE_FRAMES
-    state.evolution >= 3 &&
-        state.evolutionPath == EvolutionPath.GOOD &&
-        food == FoodType.HAM ->
-        R.drawable.loem_stormkaiser_ham_sheet to STORMKAISER_STATE_FRAMES
-    state.evolution >= 3 &&
-        state.evolutionPath == EvolutionPath.GOOD ->
-        R.drawable.loem_stormkaiser_melon_sheet to STORMKAISER_STATE_FRAMES
-    state.evolution >= 2 && state.evolutionPath == EvolutionPath.MUD_TOAD && food == FoodType.HAM ->
-        R.drawable.loem_mud_toad_ham_sheet to MUD_TOAD_STATE_FRAMES
-    state.evolution >= 2 && state.evolutionPath == EvolutionPath.MUD_TOAD ->
-        R.drawable.loem_mud_toad_melon_sheet to MUD_TOAD_STATE_FRAMES
-    state.evolution >= 2 && state.evolutionPath == EvolutionPath.BAD && food == FoodType.HAM ->
-        R.drawable.loem_poop_ham_sheet to POOP_STATE_FRAMES
-    state.evolution >= 2 && state.evolutionPath == EvolutionPath.BAD ->
-        R.drawable.loem_poop_melon_sheet to POOP_STATE_FRAMES
-    state.evolution >= 2 && state.evolutionPath == EvolutionPath.SERPENT && food == FoodType.HAM ->
-        R.drawable.loem_serpent_ham_sheet to SERPENT_EVOLUTION_IDLE_FRAMES
-    state.evolution >= 2 && state.evolutionPath == EvolutionPath.SERPENT ->
-        R.drawable.loem_serpent_melon_sheet to SERPENT_EVOLUTION_IDLE_FRAMES
-    state.evolution >= 2 && state.evolutionPath == EvolutionPath.GOOD && food == FoodType.HAM ->
-        R.drawable.loem_wing_evolution_ham_sheet to MAJESTIC_WING_HAM_FRAMES
-    state.evolution >= 2 && state.evolutionPath == EvolutionPath.GOOD ->
-        R.drawable.loem_wing_evolution_melon_sheet to MAJESTIC_WING_MELON_FRAMES
-    state.evolution > 0 && state.evolutionPath == EvolutionPath.GOOD && food == FoodType.HAM ->
-        R.drawable.loem_good_ham_sheet to GOOD_HAM_FRAMES
-    state.evolution > 0 && state.evolutionPath == EvolutionPath.GOOD ->
-        R.drawable.loem_good_melon_sheet to GOOD_MELON_FRAMES
-    state.evolution > 0 && state.evolutionPath == EvolutionPath.BAD && food == FoodType.HAM ->
-        R.drawable.loem_bad_ham_sheet to BAD_HAM_FRAMES
-    state.evolution > 0 && state.evolutionPath == EvolutionPath.BAD ->
-        R.drawable.loem_bad_melon_sheet to BAD_MELON_FRAMES
-    food == FoodType.HAM -> R.drawable.loem_feeding_sheet to FEEDING_FRAMES
-    else -> R.drawable.loem_melon_sheet to FEEDING_FRAMES
 }
 
 @Composable
@@ -3313,6 +3318,14 @@ private fun SettingsScreen(
                 Triple("Trübsal-Zauberhaufen-Löm/in (geschlechtsabhängig)", 3, EvolutionPath.BAD),
                 Triple("Majestätischer Flügel-Löm", 2, EvolutionPath.GOOD),
                 Triple("Sturmkaiser-Löm (männlich)", 3, EvolutionPath.GOOD),
+                Triple("Ultra-Raumriss-Löm (geschlechtsneutral)", 4, EvolutionPath.GOOD),
+                Triple("Raumriss-Urkröte (geschlechtsneutral)", 4, EvolutionPath.MUD_TOAD),
+                Triple("Raumriss-Weltschlange (geschlechtsneutral)", 4, EvolutionPath.SERPENT),
+                Triple(
+                    "Ultra-Armageddon-Raumriss-Erzmagierhaufen-Löm (geschlechtsneutral)",
+                    4,
+                    EvolutionPath.BAD,
+                ),
                 Triple("Prunkschlangen-Löm", 2, EvolutionPath.SERPENT),
                 Triple(
                     "Armageddon-Prunkschlangenkaiser/in-Löm (geschlechtsabhängig)",

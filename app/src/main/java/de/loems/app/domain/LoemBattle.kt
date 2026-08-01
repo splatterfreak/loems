@@ -231,6 +231,10 @@ object LoemBattle {
 
     private fun baseStats(state: LoemGameState): Pair<Int, Int> = when {
         state.evolution == 0 -> 5 to 5
+        state.evolution >= 4 && state.evolutionPath == EvolutionPath.GOOD -> 28 to 26
+        state.evolution >= 4 && state.evolutionPath == EvolutionPath.MUD_TOAD -> 24 to 32
+        state.evolution >= 4 && state.evolutionPath == EvolutionPath.SERPENT -> 32 to 24
+        state.evolution >= 4 && state.evolutionPath == EvolutionPath.BAD -> 26 to 30
         state.evolution >= 3 && state.evolutionPath == EvolutionPath.SERPENT -> 20 to 24
         state.evolutionPath == EvolutionPath.SERPENT -> 15 to 18
         state.evolution >= 3 &&

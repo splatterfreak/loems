@@ -13,15 +13,6 @@ from generate_wart_emperor_male_state_sheets import (
 )
 
 
-STATE_NAMES = (
-    "battle_attack",
-    "battle_hit",
-    "battle_double_attack",
-    "battle_double_hit",
-    "battle_victory",
-)
-
-
 def build_gender(gender: str, food_centers: tuple[tuple[int, int], ...]) -> None:
     prefix = f"loem_armageddon_serpent_{gender}"
     idle_sheet = Image.open(PREVIEWS / f"{prefix}_idle_sheet.png").convert("RGBA")
@@ -32,8 +23,8 @@ def build_gender(gender: str, food_centers: tuple[tuple[int, int], ...]) -> None
     sleep_frames = [frame(sleep_sheet, index) for index in range(FRAME_COUNT)]
     hungry_frames = [frame(feeding_sheet, index) for index in range(FRAME_COUNT)]
 
-    majestic_melon = Image.open(DRAWABLE / "loem_wing_evolution_melon_sheet.png").convert("RGBA")
-    majestic_ham = Image.open(DRAWABLE / "loem_wing_evolution_ham_sheet.png").convert("RGBA")
+    majestic_melon = Image.open(DRAWABLE / "loem_wing_evolution_melon_sheet.webp").convert("RGBA")
+    majestic_ham = Image.open(DRAWABLE / "loem_wing_evolution_ham_sheet.webp").convert("RGBA")
     melon_props = [extract_food(frame(majestic_melon, index)) for index in range(5)]
     ham_props = [extract_food(frame(majestic_ham, index)) for index in range(5)]
 
@@ -49,22 +40,16 @@ def build_gender(gender: str, food_centers: tuple[tuple[int, int], ...]) -> None
         ham_frames.append(ham)
 
     outputs = {
-        f"{prefix}_idle_sheet.png": idle_frames,
-        f"{prefix}_hungry_sheet.png": hungry_frames,
-        f"{prefix}_sleep_sheet.png": sleep_frames,
-        f"{prefix}_melon_sheet.png": melon_frames,
-        f"{prefix}_ham_sheet.png": ham_frames,
+        f"{prefix}_idle_sheet.webp": idle_frames,
+        f"{prefix}_hungry_sheet.webp": hungry_frames,
+        f"{prefix}_sleep_sheet.webp": sleep_frames,
+        f"{prefix}_melon_sheet.webp": melon_frames,
+        f"{prefix}_ham_sheet.webp": ham_frames,
     }
     for filename, frames in outputs.items():
         write_sheet(frames, DRAWABLE / filename)
 
-    # Compose supplies the combat motion. Reusing the locked idle frames keeps
-    # one head, two horns, two wings, four legs/feet and one tail in every state.
-    for state in STATE_NAMES:
-        write_sheet(
-            [current.copy() for current in idle_frames],
-            DRAWABLE / f"{prefix}_{state}_sheet.png",
-        )
+    # Compose supplies combat motion; all static combat slots reuse the idle WebP.
 
 
 def build() -> None:

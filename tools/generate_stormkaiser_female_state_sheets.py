@@ -23,7 +23,7 @@ def write_sheet(frames: list[Image.Image], output: Path) -> None:
         row, column = divmod(index, 3)
         sheet.alpha_composite(current, (column * CELL, row * CELL))
     output.parent.mkdir(parents=True, exist_ok=True)
-    sheet.save(output)
+    sheet.save(output, "WEBP", lossless=True, quality=100, method=6)
 
 
 def largest_component(mask: Image.Image) -> Image.Image:
@@ -116,7 +116,7 @@ def build() -> None:
     approved_idle = Image.open(PREVIEWS / "loem_stormkaiser_female_idle_sheet.png").convert("RGBA")
     approved_frames = [frame(approved_idle, index) for index in range(FRAME_COUNT)]
 
-    idle_output = DRAWABLE / "loem_stormkaiser_female_idle_sheet.png"
+    idle_output = DRAWABLE / "loem_stormkaiser_female_idle_sheet.webp"
     write_sheet([current.copy() for current in approved_frames], idle_output)
 
     hungry_frames = []
@@ -124,10 +124,10 @@ def build() -> None:
         current = source.copy()
         add_hungry_expression(current, index)
         hungry_frames.append(current)
-    write_sheet(hungry_frames, DRAWABLE / "loem_stormkaiser_female_hungry_sheet.png")
+    write_sheet(hungry_frames, DRAWABLE / "loem_stormkaiser_female_hungry_sheet.webp")
 
-    male_melon = Image.open(DRAWABLE / "loem_stormkaiser_melon_sheet.png").convert("RGBA")
-    male_ham = Image.open(DRAWABLE / "loem_stormkaiser_ham_sheet.png").convert("RGBA")
+    male_melon = Image.open(DRAWABLE / "loem_stormkaiser_melon_sheet.webp").convert("RGBA")
+    male_ham = Image.open(DRAWABLE / "loem_stormkaiser_ham_sheet.webp").convert("RGBA")
     melon_props = [extract_food(frame(male_melon, index)) for index in range(5)]
     ham_props = [extract_food(frame(male_ham, index)) for index in range(5)]
     melon_centers = ((390, 294), (385, 278), (381, 274), (380, 279), (377, 278))
@@ -143,22 +143,10 @@ def build() -> None:
             composite_centered(ham_frame, ham_props[index], ham_centers[index])
         melon_frames.append(melon_frame)
         ham_frames.append(ham_frame)
-    write_sheet(melon_frames, DRAWABLE / "loem_stormkaiser_female_melon_sheet.png")
-    write_sheet(ham_frames, DRAWABLE / "loem_stormkaiser_female_ham_sheet.png")
+    write_sheet(melon_frames, DRAWABLE / "loem_stormkaiser_female_melon_sheet.webp")
+    write_sheet(ham_frames, DRAWABLE / "loem_stormkaiser_female_ham_sheet.webp")
 
-    # Battle motion is driven by BattleLoemSprite translations in Compose. Reusing the locked
-    # canonical frames keeps the approved anatomy exact in every battle frame.
-    for state in (
-        "battle_attack",
-        "battle_hit",
-        "battle_double_attack",
-        "battle_double_hit",
-        "battle_victory",
-    ):
-        write_sheet(
-            [current.copy() for current in approved_frames],
-            DRAWABLE / f"loem_stormkaiser_female_{state}_sheet.png",
-        )
+    # Compose drives battle motion; all static combat slots reuse the idle WebP.
 
 
 if __name__ == "__main__":

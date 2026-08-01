@@ -22,8 +22,8 @@ def build() -> None:
     sleep_frames = [frame(sleep_sheet, index) for index in range(FRAME_COUNT)]
     hungry_frames = [frame(feeding_sheet, index) for index in range(FRAME_COUNT)]
 
-    majestic_melon = Image.open(DRAWABLE / "loem_wing_evolution_melon_sheet.png").convert("RGBA")
-    majestic_ham = Image.open(DRAWABLE / "loem_wing_evolution_ham_sheet.png").convert("RGBA")
+    majestic_melon = Image.open(DRAWABLE / "loem_wing_evolution_melon_sheet.webp").convert("RGBA")
+    majestic_ham = Image.open(DRAWABLE / "loem_wing_evolution_ham_sheet.webp").convert("RGBA")
     melon_props = [extract_food(frame(majestic_melon, index)) for index in range(5)]
     ham_props = [extract_food(frame(majestic_ham, index)) for index in range(5)]
     food_centers = ((414, 382), (408, 374), (399, 367), (391, 363), (398, 371))
@@ -40,28 +40,16 @@ def build() -> None:
         ham_frames.append(ham)
 
     outputs = {
-        "loem_wart_emperor_female_idle_sheet.png": idle_frames,
-        "loem_wart_emperor_female_hungry_sheet.png": hungry_frames,
-        "loem_wart_emperor_female_sleep_sheet.png": sleep_frames,
-        "loem_wart_emperor_female_melon_sheet.png": melon_frames,
-        "loem_wart_emperor_female_ham_sheet.png": ham_frames,
+        "loem_wart_emperor_female_idle_sheet.webp": idle_frames,
+        "loem_wart_emperor_female_hungry_sheet.webp": hungry_frames,
+        "loem_wart_emperor_female_sleep_sheet.webp": sleep_frames,
+        "loem_wart_emperor_female_melon_sheet.webp": melon_frames,
+        "loem_wart_emperor_female_ham_sheet.webp": ham_frames,
     }
     for filename, frames in outputs.items():
         write_sheet(frames, DRAWABLE / filename)
 
-    # Compose supplies combat motion. Locked idle frames guarantee that the female
-    # form keeps two wings, two horns, four feet, one tail and one tongue throughout.
-    for state in (
-        "battle_attack",
-        "battle_hit",
-        "battle_double_attack",
-        "battle_double_hit",
-        "battle_victory",
-    ):
-        write_sheet(
-            [current.copy() for current in idle_frames],
-            DRAWABLE / f"loem_wart_emperor_female_{state}_sheet.png",
-        )
+    # Compose supplies combat motion; all static combat slots reuse the idle WebP.
 
 
 if __name__ == "__main__":

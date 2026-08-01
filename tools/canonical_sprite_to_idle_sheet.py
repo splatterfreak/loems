@@ -73,7 +73,10 @@ def main() -> None:
         sheet.alpha_composite(frame, (column * args.cell_size, row * args.cell_size))
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    sheet.save(args.output)
+    if args.output.suffix.lower() == ".webp":
+        sheet.save(args.output, "WEBP", lossless=True, quality=100, method=6)
+    else:
+        sheet.save(args.output)
 
 
 if __name__ == "__main__":

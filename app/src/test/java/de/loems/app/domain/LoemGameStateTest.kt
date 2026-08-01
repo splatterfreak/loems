@@ -324,6 +324,212 @@ class LoemGameStateTest {
     }
 
     @Test
+    fun ultraEvolutionAgeIsDeterministicBetweenDayThirtyAndThirtyFive() {
+        val state = LoemGameState(bornAtMillis = 1_735_689_600_000L)
+        val age = LoemEvolution.nextUltraEvolutionAgeHours(state)
+
+        assertTrue(
+            age in ULTRA_EVOLUTION_MIN_AGE_HOURS..
+                (ULTRA_EVOLUTION_MIN_AGE_HOURS + ULTRA_EVOLUTION_WINDOW_HOURS),
+        )
+        assertEquals(age, LoemEvolution.nextUltraEvolutionAgeHours(state))
+    }
+
+    @Test
+    fun onlyBestAdultPathCanBecomeGenderNeutralUltraForm() {
+        val stormkaiser = LoemGameState(
+            bornAtMillis = 0,
+            evolution = 3,
+            evolutionPath = EvolutionPath.GOOD,
+            weightAtLastUpdateGrams = LoemWeightProfile.STORMKAISER.healthyWeightGrams,
+        )
+        val levelFiveExperience = LoemBattle.experienceToReachLevel(5)
+        val qualifiedStormkaiser = stormkaiser.copy(battleExperience = levelFiveExperience)
+        val thresholdMillis =
+            LoemEvolution.nextUltraEvolutionAgeHours(qualifiedStormkaiser) * 60 * 60 * 1_000L
+
+        assertFalse(LoemEvolution.canBecomeUltra(qualifiedStormkaiser, thresholdMillis - 1))
+        assertFalse(
+            LoemEvolution.canBecomeUltra(
+                qualifiedStormkaiser.copy(battleExperience = levelFiveExperience - 1),
+                thresholdMillis,
+            ),
+        )
+        assertTrue(LoemEvolution.canBecomeUltra(qualifiedStormkaiser, thresholdMillis))
+        assertTrue(
+            LoemEvolution.canBecomeUltra(
+                qualifiedStormkaiser.copy(gender = LoemGender.FEMALE),
+                thresholdMillis,
+            ),
+        )
+        assertFalse(
+            LoemEvolution.canBecomeUltra(
+                qualifiedStormkaiser.copy(evolutionPath = EvolutionPath.BAD),
+                thresholdMillis,
+            ),
+        )
+
+        val maleUltra = qualifiedStormkaiser.evolved(EvolutionPath.GOOD)
+        val femaleUltra = qualifiedStormkaiser
+            .copy(gender = LoemGender.FEMALE)
+            .evolved(EvolutionPath.GOOD)
+        assertEquals(4, maleUltra.evolution)
+        assertEquals(LoemWeightProfile.ULTRA_COSMIC, maleUltra.weightProfile())
+        assertEquals(36_000, maleUltra.weightAtLastUpdateGrams)
+        assertEquals("Ultra-Raumriss-Löm", LoemEvolution.title(4, EvolutionPath.GOOD, LoemGender.MALE))
+        assertEquals(
+            LoemEvolution.title(4, EvolutionPath.GOOD, LoemGender.MALE),
+            LoemEvolution.title(4, EvolutionPath.GOOD, LoemGender.FEMALE),
+        )
+        assertEquals(maleUltra.weightProfile(), femaleUltra.weightProfile())
+    }
+
+    @Test
+    fun wartEmperorCanBecomeGenderNeutralSpaceRiftUrToadAtLevelFive() {
+        val wartEmperor = LoemGameState(
+            bornAtMillis = 0,
+            evolution = 3,
+            evolutionPath = EvolutionPath.MUD_TOAD,
+            weightAtLastUpdateGrams = LoemWeightProfile.WART_EMPEROR.healthyWeightGrams,
+        )
+        val levelFiveExperience = LoemBattle.experienceToReachLevel(5)
+        val qualified = wartEmperor.copy(battleExperience = levelFiveExperience)
+        val thresholdMillis =
+            LoemEvolution.nextUltraEvolutionAgeHours(qualified) * 60 * 60 * 1_000L
+
+        assertFalse(LoemEvolution.canBecomeSpaceRiftUrToad(qualified, thresholdMillis - 1))
+        assertFalse(
+            LoemEvolution.canBecomeSpaceRiftUrToad(
+                qualified.copy(battleExperience = levelFiveExperience - 1),
+                thresholdMillis,
+            ),
+        )
+        assertFalse(
+            LoemEvolution.canBecomeSpaceRiftUrToad(
+                qualified.copy(evolutionPath = EvolutionPath.GOOD),
+                thresholdMillis,
+            ),
+        )
+        assertTrue(LoemEvolution.canBecomeSpaceRiftUrToad(qualified, thresholdMillis))
+        assertTrue(
+            LoemEvolution.canBecomeSpaceRiftUrToad(
+                qualified.copy(gender = LoemGender.FEMALE),
+                thresholdMillis,
+            ),
+        )
+
+        val maleFinal = qualified.evolved(EvolutionPath.MUD_TOAD)
+        val femaleFinal = qualified.copy(gender = LoemGender.FEMALE)
+            .evolved(EvolutionPath.MUD_TOAD)
+        assertEquals(4, maleFinal.evolution)
+        assertEquals(LoemWeightProfile.SPACE_RIFT_URTOAD, maleFinal.weightProfile())
+        assertEquals(46_000, maleFinal.weightAtLastUpdateGrams)
+        assertEquals(
+            LoemEvolution.title(4, EvolutionPath.MUD_TOAD, LoemGender.MALE),
+            LoemEvolution.title(4, EvolutionPath.MUD_TOAD, LoemGender.FEMALE),
+        )
+        assertEquals(maleFinal.weightProfile(), femaleFinal.weightProfile())
+    }
+
+    @Test
+    fun armageddonSerpentCanBecomeGenderNeutralSpaceRiftWorldSerpentAtLevelFive() {
+        val armageddonSerpent = LoemGameState(
+            bornAtMillis = 0,
+            evolution = 3,
+            evolutionPath = EvolutionPath.SERPENT,
+            weightAtLastUpdateGrams = LoemWeightProfile.ARMAGEDDON_SERPENT.healthyWeightGrams,
+        )
+        val levelFiveExperience = LoemBattle.experienceToReachLevel(5)
+        val qualified = armageddonSerpent.copy(battleExperience = levelFiveExperience)
+        val thresholdMillis =
+            LoemEvolution.nextUltraEvolutionAgeHours(qualified) * 60 * 60 * 1_000L
+
+        assertFalse(LoemEvolution.canBecomeSpaceRiftWorldSerpent(qualified, thresholdMillis - 1))
+        assertFalse(
+            LoemEvolution.canBecomeSpaceRiftWorldSerpent(
+                qualified.copy(battleExperience = levelFiveExperience - 1),
+                thresholdMillis,
+            ),
+        )
+        assertFalse(
+            LoemEvolution.canBecomeSpaceRiftWorldSerpent(
+                qualified.copy(evolutionPath = EvolutionPath.GOOD),
+                thresholdMillis,
+            ),
+        )
+        assertTrue(LoemEvolution.canBecomeSpaceRiftWorldSerpent(qualified, thresholdMillis))
+        assertTrue(
+            LoemEvolution.canBecomeSpaceRiftWorldSerpent(
+                qualified.copy(gender = LoemGender.FEMALE),
+                thresholdMillis,
+            ),
+        )
+
+        val maleFinal = qualified.evolved(EvolutionPath.SERPENT)
+        val femaleFinal = qualified.copy(gender = LoemGender.FEMALE)
+            .evolved(EvolutionPath.SERPENT)
+        assertEquals(4, maleFinal.evolution)
+        assertEquals(LoemWeightProfile.SPACE_RIFT_WORLD_SERPENT, maleFinal.weightProfile())
+        assertEquals(44_000, maleFinal.weightAtLastUpdateGrams)
+        assertEquals(
+            LoemEvolution.title(4, EvolutionPath.SERPENT, LoemGender.MALE),
+            LoemEvolution.title(4, EvolutionPath.SERPENT, LoemGender.FEMALE),
+        )
+        assertEquals(maleFinal.weightProfile(), femaleFinal.weightProfile())
+    }
+
+    @Test
+    fun gloomWizardCanBecomeGenderNeutralSpaceRiftArchmagePoopAtLevelFive() {
+        val gloomWizard = LoemGameState(
+            bornAtMillis = 0,
+            evolution = 3,
+            evolutionPath = EvolutionPath.BAD,
+            weightAtLastUpdateGrams = LoemWeightProfile.GLOOM_WIZARD.healthyWeightGrams,
+        )
+        val levelFiveExperience = LoemBattle.experienceToReachLevel(5)
+        val qualified = gloomWizard.copy(battleExperience = levelFiveExperience)
+        val thresholdMillis =
+            LoemEvolution.nextUltraEvolutionAgeHours(qualified) * 60 * 60 * 1_000L
+
+        assertFalse(LoemEvolution.canBecomeSpaceRiftArchmagePoop(qualified, thresholdMillis - 1))
+        assertFalse(
+            LoemEvolution.canBecomeSpaceRiftArchmagePoop(
+                qualified.copy(battleExperience = levelFiveExperience - 1),
+                thresholdMillis,
+            ),
+        )
+        assertFalse(
+            LoemEvolution.canBecomeSpaceRiftArchmagePoop(
+                qualified.copy(evolutionPath = EvolutionPath.GOOD),
+                thresholdMillis,
+            ),
+        )
+        assertTrue(LoemEvolution.canBecomeSpaceRiftArchmagePoop(qualified, thresholdMillis))
+        assertTrue(
+            LoemEvolution.canBecomeSpaceRiftArchmagePoop(
+                qualified.copy(gender = LoemGender.FEMALE),
+                thresholdMillis,
+            ),
+        )
+
+        val maleFinal = qualified.evolved(EvolutionPath.BAD)
+        val femaleFinal = qualified.copy(gender = LoemGender.FEMALE)
+            .evolved(EvolutionPath.BAD)
+        assertEquals(4, maleFinal.evolution)
+        assertEquals(LoemWeightProfile.SPACE_RIFT_ARCHMAGE_POOP, maleFinal.weightProfile())
+        assertEquals(40_000, maleFinal.weightAtLastUpdateGrams)
+        assertEquals(
+            "Ultra-Armageddon-Raumriss-Erzmagierhaufen-Löm",
+            LoemEvolution.title(4, EvolutionPath.BAD, LoemGender.MALE),
+        )
+        assertEquals(
+            LoemEvolution.title(4, EvolutionPath.BAD, LoemGender.MALE),
+            LoemEvolution.title(4, EvolutionPath.BAD, LoemGender.FEMALE),
+        )
+        assertEquals(maleFinal.weightProfile(), femaleFinal.weightProfile())
+    }
+
+    @Test
     fun maleAndFemaleMajesticLoemCanAutomaticallyBecomeAdult() {
         val male = LoemGameState(
             bornAtMillis = 0,
@@ -672,6 +878,37 @@ class LoemGameStateTest {
 
         assertEquals(EvolutionPath.GOOD, LoemEvolution.chooseFromCare(good, 0, 12))
         assertEquals(EvolutionPath.BAD, LoemEvolution.chooseFromCare(bad, 0, 12))
+    }
+
+    @Test
+    fun careMemoryIsNormalizedTo72HoursWithoutChangingItsAverage() {
+        val legacy = LoemGameState(
+            bornAtMillis = 0,
+            careScore = 800f,
+            careHours = 200f,
+        )
+
+        val normalized = legacy.withCareObservation(snapshotScore = 4f, elapsedHours = 1f)
+
+        assertEquals(CARE_MEMORY_HOURS, normalized.careHours, 0.001f)
+        assertEquals(4f, normalized.careScore / normalized.careHours, 0.001f)
+    }
+
+    @Test
+    fun careMemoryNeverExceeds72HoursAndRecentCareCanReplaceOldCare() {
+        val poorlyCaredFor = LoemGameState(
+            bornAtMillis = 0,
+            careScore = -10f * CARE_MEMORY_HOURS,
+            careHours = CARE_MEMORY_HOURS,
+        )
+
+        val recovered = poorlyCaredFor.withCareObservation(
+            snapshotScore = 8f,
+            elapsedHours = CARE_MEMORY_HOURS,
+        )
+
+        assertEquals(CARE_MEMORY_HOURS, recovered.careHours, 0.001f)
+        assertEquals(8f, recovered.careScore / recovered.careHours, 0.001f)
     }
 
     @Test

@@ -25,6 +25,60 @@ class LoemBattleTest {
     }
 
     @Test
+    fun spaceRiftUrToadIsTheDefensiveFinalToad() {
+        val male = LoemGameState(
+            bornAtMillis = 0,
+            gender = LoemGender.MALE,
+            evolution = 4,
+            evolutionPath = EvolutionPath.MUD_TOAD,
+        )
+        val stats = LoemBattle.stats(male, nowMillis = 0, localHour = 12)
+
+        assertEquals(24, stats.baseStrength)
+        assertEquals(32, stats.baseDefense)
+        assertEquals(
+            stats,
+            LoemBattle.stats(male.copy(gender = LoemGender.FEMALE), nowMillis = 0, localHour = 12),
+        )
+    }
+
+    @Test
+    fun spaceRiftWorldSerpentIsTheOffensiveFinalSerpent() {
+        val male = LoemGameState(
+            bornAtMillis = 0,
+            gender = LoemGender.MALE,
+            evolution = 4,
+            evolutionPath = EvolutionPath.SERPENT,
+        )
+        val stats = LoemBattle.stats(male, nowMillis = 0, localHour = 12)
+
+        assertEquals(32, stats.baseStrength)
+        assertEquals(24, stats.baseDefense)
+        assertEquals(
+            stats,
+            LoemBattle.stats(male.copy(gender = LoemGender.FEMALE), nowMillis = 0, localHour = 12),
+        )
+    }
+
+    @Test
+    fun spaceRiftArchmagePoopIsTheBalancedDefensiveFinalBadForm() {
+        val male = LoemGameState(
+            bornAtMillis = 0,
+            gender = LoemGender.MALE,
+            evolution = 4,
+            evolutionPath = EvolutionPath.BAD,
+        )
+        val stats = LoemBattle.stats(male, nowMillis = 0, localHour = 12)
+
+        assertEquals(26, stats.baseStrength)
+        assertEquals(30, stats.baseDefense)
+        assertEquals(
+            stats,
+            LoemBattle.stats(male.copy(gender = LoemGender.FEMALE), nowMillis = 0, localHour = 12),
+        )
+    }
+
+    @Test
     fun maleAndFemaleStormkaiserHaveIdenticalBattleStats() {
         val male = LoemGameState(
             bornAtMillis = 0,
@@ -133,6 +187,23 @@ class LoemBattleTest {
         assertEquals(15, majesticStats.baseDefense)
         assertEquals(22, stormkaiserStats.baseStrength)
         assertEquals(20, stormkaiserStats.baseDefense)
+    }
+
+    @Test
+    fun ultraCosmicFormIsStrongerAndGenderNeutral() {
+        val male = LoemGameState(
+            bornAtMillis = 0,
+            gender = LoemGender.MALE,
+            evolution = 4,
+            evolutionPath = EvolutionPath.GOOD,
+        )
+        val female = male.copy(gender = LoemGender.FEMALE)
+
+        val maleStats = LoemBattle.stats(male, 0, 12)
+        val femaleStats = LoemBattle.stats(female, 0, 12)
+        assertEquals(28, maleStats.baseStrength)
+        assertEquals(26, maleStats.baseDefense)
+        assertEquals(maleStats, femaleStats)
     }
 
     @Test

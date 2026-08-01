@@ -5,6 +5,7 @@ import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.net.wifi.WifiManager
 import de.loems.app.domain.EvolutionPath
+import de.loems.app.domain.EVOLUTION_COUNT
 import de.loems.app.domain.LoemBattle
 import de.loems.app.domain.LoemBattleResult
 import de.loems.app.domain.LoemBattleSnapshot
@@ -385,7 +386,7 @@ private object BattleProtocol {
             snapshot = LoemBattleSnapshot(
                 name = decode(parts[2]).take(20),
                 element = LoemElement.valueOf(parts[3]),
-                evolution = parts[4].toInt().coerceIn(0, 3),
+                evolution = parts[4].toInt().coerceIn(0, EVOLUTION_COUNT - 1),
                 evolutionPath = EvolutionPath.valueOf(parts[5]),
                 strength = parts[6].toInt().coerceIn(1, 999),
                 defense = parts[7].toInt().coerceIn(1, 999),

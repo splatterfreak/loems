@@ -80,27 +80,27 @@ def build(source: Image.Image, output: Path, painter, vertical_offsets: tuple[in
         row, column = divmod(index, 3)
         result.alpha_composite(current, (column * CELL, row * CELL))
     output.parent.mkdir(parents=True, exist_ok=True)
-    result.save(output)
+    result.save(output, "WEBP", lossless=True, quality=100, method=6)
 
 
 def main() -> None:
     global MELON_PROPS, HAM_PROPS
     drawable = Path("app/src/main/res/drawable-nodpi")
-    idle_source = Image.open(drawable / "loem_serpent_evolution_idle_sheet.png").convert("RGBA")
-    eating_source = Image.open(drawable / "loem_serpent_eating_mouth_sheet.png").convert("RGBA")
-    wing_melon = Image.open(drawable / "loem_wing_evolution_melon_sheet.png").convert("RGBA")
-    wing_ham = Image.open(drawable / "loem_wing_evolution_ham_sheet.png").convert("RGBA")
+    idle_source = Image.open(drawable / "loem_serpent_evolution_idle_sheet.webp").convert("RGBA")
+    eating_source = Image.open(drawable / "loem_serpent_eating_mouth_sheet.webp").convert("RGBA")
+    wing_melon = Image.open(drawable / "loem_wing_evolution_melon_sheet.webp").convert("RGBA")
+    wing_ham = Image.open(drawable / "loem_wing_evolution_ham_sheet.webp").convert("RGBA")
     melon_crops = ((305, 265, 440, 420), (290, 270, 440, 410), (330, 300, 460, 405),
                    (315, 305, 430, 415), (325, 320, 420, 400))
     ham_crops = ((315, 285, 490, 475), (320, 260, 495, 420), (345, 275, 510, 415),
                  (335, 290, 495, 430), (350, 300, 480, 410))
     MELON_PROPS = [extract_food(frame(wing_melon, i), melon_crops[i], (82, 94)) for i in range(5)] + [None]
     HAM_PROPS = [extract_food(frame(wing_ham, i), ham_crops[i], (88, 92)) for i in range(5)] + [None]
-    build(idle_source, drawable / "loem_serpent_hungry_sheet.png", draw_hungry)
-    build(idle_source, drawable / "loem_serpent_sleep_sheet.png", draw_sleep)
+    build(idle_source, drawable / "loem_serpent_hungry_sheet.webp", draw_hungry)
+    build(idle_source, drawable / "loem_serpent_sleep_sheet.webp", draw_sleep)
     feeding_alignment = (-2, -2, 0, 0, 0, 0)
-    build(eating_source, drawable / "loem_serpent_melon_sheet.png", draw_melon, feeding_alignment)
-    build(eating_source, drawable / "loem_serpent_ham_sheet.png", draw_ham, feeding_alignment)
+    build(eating_source, drawable / "loem_serpent_melon_sheet.webp", draw_melon, feeding_alignment)
+    build(eating_source, drawable / "loem_serpent_ham_sheet.webp", draw_ham, feeding_alignment)
 
 
 if __name__ == "__main__":

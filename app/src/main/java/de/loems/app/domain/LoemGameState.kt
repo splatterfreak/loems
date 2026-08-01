@@ -1,13 +1,16 @@
 package de.loems.app.domain
 
 const val HATCH_DURATION_MILLIS = 5 * 60 * 1_000L
-const val EVOLUTION_COUNT = 4
+const val EVOLUTION_COUNT = 5
 const val FIRST_EVOLUTION_MIN_AGE_HOURS = 72L
 const val FIRST_EVOLUTION_WINDOW_HOURS = 24L
 const val MAJESTIC_EVOLUTION_MIN_AGE_HOURS = 5 * 24L
 const val MAJESTIC_EVOLUTION_WINDOW_HOURS = 2 * 24L
 const val ADULT_EVOLUTION_MIN_AGE_HOURS = 14 * 24L
 const val ADULT_EVOLUTION_WINDOW_HOURS = 2 * 24L
+const val ULTRA_EVOLUTION_MIN_AGE_HOURS = 30 * 24L
+const val ULTRA_EVOLUTION_WINDOW_HOURS = 5 * 24L
+const val ULTRA_EVOLUTION_MIN_BATTLE_LEVEL = 5
 const val INITIAL_WEIGHT_GRAMS = 5_000
 const val INITIAL_HUNGER = 15f
 const val HUNGER_PER_HOUR = 5f
@@ -35,6 +38,7 @@ const val POOR_CONDITION_HEALTH_LOSS_PER_HOUR = 1
 const val UNHAPPY_HEALTH_THRESHOLD = 40
 const val SYRINGE_REWARD_AGE_HOURS = 3 * 24L
 const val HEALTH_RECOVERY_HAPPINESS_THRESHOLD = 70
+const val CARE_MEMORY_HOURS = 72f
 private const val HOUR_MILLIS = 60 * 60 * 1_000L
 
 enum class FoodType(
@@ -78,6 +82,8 @@ data class PendingLoemBattle(
     val result: LoemBattleResult,
     val startedAtMillis: Long,
     val revealAtMillis: Long,
+    val previousBattleExperience: Int = 0,
+    val earnedBattleExperience: Int = 0,
 )
 
 data class LoemGameState(
@@ -482,8 +488,30 @@ data class LoemGameState(
     fun careAverage(nowMillis: Long, localHour: Int): Float =
         if (careHours > 0f) careScore / careHours else careSnapshotScore(nowMillis, localHour)
 
+    fun withCareObservation(snapshotScore: Float, elapsedHours: Float): LoemGameState {
+        if (elapsedHours <= 0f) return this
+
+        val observedHours = elapsedHours.coerceAtMost(CARE_MEMORY_HOURS)
+        val retainedHours = careHours
+            .coerceAtLeast(0f)
+            .coerceAtMost(CARE_MEMORY_HOURS - observedHours)
+        val previousAverage = if (careHours > 0f) careScore / careHours else snapshotScore
+        return copy(
+            careScore = previousAverage * retainedHours + snapshotScore * observedHours,
+            careHours = retainedHours + observedHours,
+        )
+    }
+
     fun weightProfile(): LoemWeightProfile = when {
         evolution == 0 -> LoemWeightProfile.YOUNG
+        evolution >= 4 && evolutionPath == EvolutionPath.GOOD ->
+            LoemWeightProfile.ULTRA_COSMIC
+        evolution >= 4 && evolutionPath == EvolutionPath.MUD_TOAD ->
+            LoemWeightProfile.SPACE_RIFT_URTOAD
+        evolution >= 4 && evolutionPath == EvolutionPath.SERPENT ->
+            LoemWeightProfile.SPACE_RIFT_WORLD_SERPENT
+        evolution >= 4 && evolutionPath == EvolutionPath.BAD ->
+            LoemWeightProfile.SPACE_RIFT_ARCHMAGE_POOP
         evolution >= 3 && evolutionPath == EvolutionPath.GOOD ->
             LoemWeightProfile.STORMKAISER
         evolution >= 3 &&
@@ -512,6 +540,14 @@ data class LoemGameState(
             else -> path
         }
         val newProfile = when {
+            resolvedPath == EvolutionPath.GOOD &&
+                newEvolution >= 4 -> LoemWeightProfile.ULTRA_COSMIC
+            resolvedPath == EvolutionPath.MUD_TOAD &&
+                newEvolution >= 4 -> LoemWeightProfile.SPACE_RIFT_URTOAD
+            resolvedPath == EvolutionPath.SERPENT &&
+                newEvolution >= 4 -> LoemWeightProfile.SPACE_RIFT_WORLD_SERPENT
+            resolvedPath == EvolutionPath.BAD &&
+                newEvolution >= 4 -> LoemWeightProfile.SPACE_RIFT_ARCHMAGE_POOP
             resolvedPath == EvolutionPath.GOOD &&
                 newEvolution >= 3 -> LoemWeightProfile.STORMKAISER
             resolvedPath == EvolutionPath.MUD_TOAD &&
@@ -549,6 +585,10 @@ enum class LoemWeightProfile(
     WINGED(15_000),
     MAJESTIC(20_000),
     STORMKAISER(30_000),
+    ULTRA_COSMIC(36_000),
+    SPACE_RIFT_URTOAD(46_000),
+    SPACE_RIFT_WORLD_SERPENT(44_000),
+    SPACE_RIFT_ARCHMAGE_POOP(40_000),
     WART_EMPEROR(38_000),
     ARMAGEDDON_SERPENT(42_000),
     GLOOM_WIZARD(32_000),
@@ -620,6 +660,11 @@ object LoemEvolution {
         gender: LoemGender = LoemGender.MALE,
     ): String = when {
         evolution == 0 -> "Junges Löm"
+        evolution >= 4 && path == EvolutionPath.GOOD -> "Ultra-Raumriss-Löm"
+        evolution >= 4 && path == EvolutionPath.MUD_TOAD -> "Raumriss-Urkröte"
+        evolution >= 4 && path == EvolutionPath.SERPENT -> "Raumriss-Weltschlange"
+        evolution >= 4 && path == EvolutionPath.BAD ->
+            "Ultra-Armageddon-Raumriss-Erzmagierhaufen-Löm"
         evolution >= 3 && path == EvolutionPath.GOOD ->
             if (gender == LoemGender.FEMALE) "Sturmkaiserin-Löm" else "Sturmkaiser-Löm"
         evolution >= 3 && path == EvolutionPath.MUD_TOAD ->
@@ -665,6 +710,15 @@ object LoemEvolution {
         return ADULT_EVOLUTION_MIN_AGE_HOURS + deterministicWindowOffset
     }
 
+    fun nextUltraEvolutionAgeHours(state: LoemGameState): Long {
+        val deterministicWindowOffset =
+            Math.floorMod(
+                state.bornAtMillis / HOUR_MILLIS + 41L,
+                ULTRA_EVOLUTION_WINDOW_HOURS + 1,
+            )
+        return ULTRA_EVOLUTION_MIN_AGE_HOURS + deterministicWindowOffset
+    }
+
     fun canBecomeAdult(state: LoemGameState, nowMillis: Long): Boolean =
         state.evolution == 2 &&
             (
@@ -674,6 +728,34 @@ object LoemEvolution {
                     state.evolutionPath == EvolutionPath.BAD
             ) &&
             state.ageHours(nowMillis) >= nextAdultEvolutionAgeHours(state)
+
+    fun canBecomeUltra(state: LoemGameState, nowMillis: Long): Boolean =
+        state.evolution == 3 &&
+            state.evolutionPath == EvolutionPath.GOOD &&
+            LoemBattle.levelProgress(state.battleExperience, state.battleLevelCap).level >=
+            ULTRA_EVOLUTION_MIN_BATTLE_LEVEL &&
+            state.ageHours(nowMillis) >= nextUltraEvolutionAgeHours(state)
+
+    fun canBecomeSpaceRiftUrToad(state: LoemGameState, nowMillis: Long): Boolean =
+        state.evolution == 3 &&
+            state.evolutionPath == EvolutionPath.MUD_TOAD &&
+            LoemBattle.levelProgress(state.battleExperience, state.battleLevelCap).level >=
+            ULTRA_EVOLUTION_MIN_BATTLE_LEVEL &&
+            state.ageHours(nowMillis) >= nextUltraEvolutionAgeHours(state)
+
+    fun canBecomeSpaceRiftWorldSerpent(state: LoemGameState, nowMillis: Long): Boolean =
+        state.evolution == 3 &&
+            state.evolutionPath == EvolutionPath.SERPENT &&
+            LoemBattle.levelProgress(state.battleExperience, state.battleLevelCap).level >=
+            ULTRA_EVOLUTION_MIN_BATTLE_LEVEL &&
+            state.ageHours(nowMillis) >= nextUltraEvolutionAgeHours(state)
+
+    fun canBecomeSpaceRiftArchmagePoop(state: LoemGameState, nowMillis: Long): Boolean =
+        state.evolution == 3 &&
+            state.evolutionPath == EvolutionPath.BAD &&
+            LoemBattle.levelProgress(state.battleExperience, state.battleLevelCap).level >=
+            ULTRA_EVOLUTION_MIN_BATTLE_LEVEL &&
+            state.ageHours(nowMillis) >= nextUltraEvolutionAgeHours(state)
 }
 
 fun isNightHour(hour: Int): Boolean = hour >= 20 || hour < 8

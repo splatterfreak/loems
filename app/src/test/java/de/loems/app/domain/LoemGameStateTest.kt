@@ -12,6 +12,11 @@ class LoemGameStateTest {
     }
 
     @Test
+    fun inGameSoundsAreEnabledByDefault() {
+        assertTrue(LoemGameState(bornAtMillis = 0).gameSoundsEnabled)
+    }
+
+    @Test
     fun syringeIsAwardedEveryThreeAgeDaysWithoutStacking() {
         val hour = 60 * 60 * 1_000L
         val initial = LoemGameState(bornAtMillis = 0)
@@ -324,7 +329,7 @@ class LoemGameStateTest {
     }
 
     @Test
-    fun ultraEvolutionAgeIsDeterministicBetweenDayThirtyAndThirtyFive() {
+    fun ultraEvolutionAgeIsDeterministicBetweenDayTwentyFiveAndTwentySeven() {
         val state = LoemGameState(bornAtMillis = 1_735_689_600_000L)
         val age = LoemEvolution.nextUltraEvolutionAgeHours(state)
 
@@ -333,6 +338,61 @@ class LoemGameStateTest {
                 (ULTRA_EVOLUTION_MIN_AGE_HOURS + ULTRA_EVOLUTION_WINDOW_HOURS),
         )
         assertEquals(age, LoemEvolution.nextUltraEvolutionAgeHours(state))
+    }
+
+    @Test
+    fun departureAgeIsDeterministicBetweenDayThirtyOneAndThirtyThree() {
+        val state = LoemGameState(bornAtMillis = 1_735_689_600_000L)
+        val age = LoemLifecycle.departureAgeHours(state)
+
+        assertTrue(
+            age in DEPARTURE_MIN_AGE_HOURS..
+                (DEPARTURE_MIN_AGE_HOURS + DEPARTURE_WINDOW_HOURS),
+        )
+        assertEquals(age, LoemLifecycle.departureAgeHours(state))
+    }
+
+    @Test
+    fun loemDepartsAtItsIndividualThresholdOrWhenDebugForcesIt() {
+        val state = LoemGameState(bornAtMillis = 0)
+        val thresholdMillis = LoemLifecycle.departureAgeHours(state) * 60 * 60 * 1_000L
+
+        assertFalse(LoemLifecycle.hasDeparted(state, thresholdMillis - 1))
+        assertTrue(LoemLifecycle.hasDeparted(state, thresholdMillis))
+        assertTrue(
+            LoemLifecycle.hasDeparted(
+                state.copy(debugDepartureTriggered = true),
+                nowMillis = 0,
+            ),
+        )
+    }
+
+    @Test
+    fun departureTimestampUsesScheduledMomentInsteadOfLaterAppOpening() {
+        val hour = 60 * 60 * 1_000L
+        val state = LoemGameState(bornAtMillis = 1_000L, bonusAgeHours = 3L)
+        val expected = state.bornAtMillis +
+            (LoemLifecycle.departureAgeHours(state) - 3L) * hour
+
+        assertEquals(
+            expected,
+            LoemLifecycle.departureAtMillis(state, observedAtMillis = expected + 5 * 24 * hour),
+        )
+    }
+
+    @Test
+    fun debugDepartureTimestampUsesActualTriggerMoment() {
+        val triggeredAt = 123_456L
+        val state = LoemGameState(
+            bornAtMillis = 1_000L,
+            debugDepartureTriggered = true,
+            debugDepartureTriggeredAtMillis = triggeredAt,
+        )
+
+        assertEquals(
+            triggeredAt,
+            LoemLifecycle.departureAtMillis(state, observedAtMillis = triggeredAt + 99_000L),
+        )
     }
 
     @Test

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from collections import deque
+from math import hypot
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageChops, ImageDraw, ImageFilter
 
 
 CELL = 512
@@ -22,28 +23,144 @@ def write_sheet(frames: list[Image.Image], output: Path) -> None:
     for index, current in enumerate(frames):
         row, column = divmod(index, 3)
         sheet.alpha_composite(current, (column * CELL, row * CELL))
+    sheet.putdata(
+        [
+            (0, 0, 0, 0) if alpha == 0 else (red, green, blue, alpha)
+            for red, green, blue, alpha in sheet.get_flattened_data()
+        ]
+    )
     output.parent.mkdir(parents=True, exist_ok=True)
-    sheet.save(output, "WEBP", lossless=True, quality=100, method=6)
+    sheet.save(output, "WEBP", lossless=True, quality=100, method=6, exact=True)
+    decoded = Image.open(output).convert("RGBA")
+    if ImageChops.difference(sheet, decoded).getbbox() is not None:
+        raise ValueError(f"Lossless WebP round-trip changed pixels: {output}")
 
 
-def draw_tongue(current: Image.Image, index: int, feeding: bool = False) -> tuple[int, int]:
-    draw = ImageDraw.Draw(current, "RGBA")
-    idle_lengths = (0, 14, 25, 34, 22, 8)
-    feeding_lengths = (20, 32, 45, 54, 38, 16)
-    length = (feeding_lengths if feeding else idle_lengths)[index]
-    start = (390, 337)
-    if length == 0:
+def cubic_point(
+    start: tuple[float, float],
+    control_a: tuple[float, float],
+    control_b: tuple[float, float],
+    end: tuple[float, float],
+    amount: float,
+) -> tuple[float, float]:
+    inverse = 1.0 - amount
+    return (
+        inverse**3 * start[0]
+        + 3 * inverse**2 * amount * control_a[0]
+        + 3 * inverse * amount**2 * control_b[0]
+        + amount**3 * end[0],
+        inverse**3 * start[1]
+        + 3 * inverse**2 * amount * control_a[1]
+        + 3 * inverse * amount**2 * control_b[1]
+        + amount**3 * end[1],
+    )
+
+
+def tongue_polygon(
+    points: list[tuple[float, float]],
+    root_width: float,
+    tip_width: float,
+) -> list[tuple[float, float]]:
+    left: list[tuple[float, float]] = []
+    right: list[tuple[float, float]] = []
+    last = len(points) - 1
+    for index, point in enumerate(points):
+        before = points[max(0, index - 1)]
+        after = points[min(last, index + 1)]
+        tangent_x = after[0] - before[0]
+        tangent_y = after[1] - before[1]
+        tangent_length = max(0.001, hypot(tangent_x, tangent_y))
+        normal_x = -tangent_y / tangent_length
+        normal_y = tangent_x / tangent_length
+        progress = index / last
+        # A broad root and flattened taper make this read as muscle, not tubing.
+        half_width = (root_width + (tip_width - root_width) * progress) / 2
+        left.append((point[0] + normal_x * half_width, point[1] + normal_y * half_width))
+        right.append((point[0] - normal_x * half_width, point[1] - normal_y * half_width))
+    return left + list(reversed(right))
+
+
+def draw_tongue(
+    current: Image.Image,
+    end: tuple[int, int] | None,
+    bend: int = 0,
+) -> tuple[int, int]:
+    start = (389, 340)
+    if end is None:
         return start
-    wave = (0, 5, 10, 14, 8, 3)[index]
-    middle = (start[0] + wave, start[1] + length // 2)
-    end = (start[0] + wave // 2, start[1] + length)
-    points = (start, middle, end)
-    draw.line(points, fill=(35, 24, 29, 255), width=17, joint="curve")
-    draw.line(points, fill=(230, 102, 137, 255), width=11, joint="curve")
-    draw.line(points, fill=(255, 170, 190, 180), width=3, joint="curve")
-    draw.ellipse((end[0] - 7, end[1] - 7, end[0] + 8, end[1] + 8), fill=(35, 24, 29, 255))
-    draw.ellipse((end[0] - 5, end[1] - 5, end[0] + 6, end[1] + 6), fill=(235, 110, 145, 255))
+
+    scale = 4
+    overlay = Image.new("RGBA", (CELL * scale, CELL * scale))
+    draw = ImageDraw.Draw(overlay, "RGBA")
+    control_a = (start[0] + 8 + bend, start[1] + (end[1] - start[1]) * 0.22)
+    control_b = (end[0] + bend, start[1] + (end[1] - start[1]) * 0.72)
+    centerline = [
+        cubic_point(start, control_a, control_b, end, step / 16)
+        for step in range(17)
+    ]
+
+    def scaled(points: list[tuple[float, float]]) -> list[tuple[int, int]]:
+        return [(round(x * scale), round(y * scale)) for x, y in points]
+
+    outer = tongue_polygon(centerline, root_width=18, tip_width=11)
+    inner = tongue_polygon(centerline, root_width=12, tip_width=7)
+    draw.polygon(scaled(outer), fill=(35, 24, 29, 255))
+    outer_tip_radius = 11 * scale / 2
+    draw.ellipse(
+        (
+            end[0] * scale - outer_tip_radius,
+            end[1] * scale - outer_tip_radius,
+            end[0] * scale + outer_tip_radius,
+            end[1] * scale + outer_tip_radius,
+        ),
+        fill=(35, 24, 29, 255),
+    )
+    draw.polygon(scaled(inner), fill=(232, 100, 137, 255))
+    inner_tip_radius = 7 * scale / 2
+    draw.ellipse(
+        (
+            end[0] * scale - inner_tip_radius,
+            end[1] * scale - inner_tip_radius,
+            end[0] * scale + inner_tip_radius,
+            end[1] * scale + inner_tip_radius,
+        ),
+        fill=(232, 100, 137, 255),
+    )
+
+    # A short asymmetric highlight reinforces the soft, wet surface without
+    # turning the tongue into a uniform striped tube.
+    if hypot(end[0] - start[0], end[1] - start[1]) > 17:
+        highlight = [
+            cubic_point(start, control_a, control_b, end, amount)
+            for amount in (0.24, 0.42, 0.60)
+        ]
+        draw.line(
+            scaled([(x - 2, y - 1) for x, y in highlight]),
+            fill=(255, 177, 193, 170),
+            width=2 * scale,
+        )
+
+    overlay = overlay.resize((CELL, CELL), Image.Resampling.LANCZOS)
+    current.alpha_composite(overlay)
     return end
+
+
+IDLE_TONGUES = (
+    None,
+    (398, 346),
+    (408, 350),
+    (418, 356),
+    (407, 351),
+    (397, 345),
+)
+HUNGRY_TONGUES = (
+    (404, 352),
+    (418, 361),
+    (425, 376),
+    (414, 392),
+    (423, 376),
+    (414, 358),
+)
 
 
 def largest_component(mask: Image.Image) -> Image.Image:
@@ -109,23 +226,37 @@ def add_food(current: Image.Image, prop: Image.Image, center: tuple[int, int]) -
     current.alpha_composite(prop, (center[0] - prop.width // 2, center[1] - prop.height // 2))
 
 
+def add_sleep_breath(current: Image.Image, index: int) -> None:
+    """Animate a tiny wet tongue glint; silhouette and body pixels stay locked."""
+    strength = (0, 30, 70, 95, 55, 18)[index]
+    if strength == 0:
+        return
+    overlay = Image.new("RGBA", current.size)
+    draw = ImageDraw.Draw(overlay, "RGBA")
+    draw.line((336, 346, 340, 349), fill=(255, 205, 216, strength), width=2)
+    current.alpha_composite(overlay)
+
+
 def build() -> None:
     approved_idle = Image.open(PREVIEWS / "loem_mudwing_idle_sheet.png").convert("RGBA")
     approved_sleep = Image.open(PREVIEWS / "loem_mud_toad_sleep_sheet.png").convert("RGBA")
-    base_frames = [frame(approved_idle, index) for index in range(FRAME_COUNT)]
-    sleep_frames = [frame(approved_sleep, index) for index in range(FRAME_COUNT)]
+    canonical_idle = frame(approved_idle, 0)
+    canonical_sleep = frame(approved_sleep, 0)
+    base_frames = [canonical_idle.copy() for _ in range(FRAME_COUNT)]
+    sleep_frames = [canonical_sleep.copy() for _ in range(FRAME_COUNT)]
 
     idle_frames: list[Image.Image] = []
     hungry_frames: list[Image.Image] = []
     for index, source in enumerate(base_frames):
         idle = source.copy()
-        if index in (1, 2, 3, 4):
-            draw_tongue(idle, index)
+        draw_tongue(idle, IDLE_TONGUES[index], bend=(0, 1, 3, 5, 3, 1)[index])
         idle_frames.append(idle)
 
         hungry = source.copy()
-        draw_tongue(hungry, index, feeding=True)
+        draw_tongue(hungry, HUNGRY_TONGUES[index], bend=(2, 5, 9, 12, 9, 4)[index])
         hungry_frames.append(hungry)
+
+        add_sleep_breath(sleep_frames[index], index)
 
     majestic_melon = Image.open(DRAWABLE / "loem_wing_evolution_melon_sheet.webp").convert("RGBA")
     majestic_ham = Image.open(DRAWABLE / "loem_wing_evolution_ham_sheet.webp").convert("RGBA")
@@ -137,8 +268,8 @@ def build() -> None:
     for index, source in enumerate(base_frames):
         melon = source.copy()
         ham = source.copy()
-        tongue_end = draw_tongue(melon, index, feeding=True)
-        draw_tongue(ham, index, feeding=True)
+        draw_tongue(melon, HUNGRY_TONGUES[index], bend=(2, 5, 9, 12, 9, 4)[index])
+        draw_tongue(ham, HUNGRY_TONGUES[index], bend=(2, 5, 9, 12, 9, 4)[index])
         if index < 5:
             center = (414, 377)
             add_food(melon, melon_props[index], center)

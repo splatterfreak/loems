@@ -20,6 +20,10 @@ def main() -> None:
         action="store_true",
         help="Play once and hold the final frame instead of looping (for one-shot feeding previews)",
     )
+    parser.add_argument(
+        "--crop",
+        help="Optional per-cell app crop as x,y,width,height.",
+    )
     args = parser.parse_args()
 
     sheet = Image.open(args.sheet).convert("RGBA")
@@ -34,6 +38,14 @@ def main() -> None:
             left = column * cell_width
             top = row * cell_height
             frame = sheet.crop((left, top, left + cell_width, top + cell_height))
+            if args.crop:
+                crop = tuple(int(value) for value in args.crop.split(","))
+                if len(crop) != 4:
+                    raise ValueError("--crop must be x,y,width,height")
+                crop_x, crop_y, crop_width, crop_height = crop
+                frame = frame.crop(
+                    (crop_x, crop_y, crop_x + crop_width, crop_y + crop_height)
+                )
             if args.background:
                 if len(args.background) != 6:
                     raise ValueError("--background must be a six-digit RRGGBB color")

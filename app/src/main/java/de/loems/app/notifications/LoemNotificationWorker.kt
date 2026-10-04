@@ -22,6 +22,7 @@ import de.loems.app.data.LoemGameRepository
 import de.loems.app.domain.FIRST_EVOLUTION_MIN_AGE_HOURS
 import de.loems.app.domain.HUNGRY_EXPRESSION_THRESHOLD
 import de.loems.app.domain.LoemEvolution
+import de.loems.app.domain.LoemLifecycle
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.util.concurrent.TimeUnit
@@ -35,9 +36,11 @@ class LoemNotificationWorker(
         val now = System.currentTimeMillis()
         val localDateTime = LocalDateTime.now()
         val repository = LoemGameRepository(applicationContext)
+        if (!repository.prepareBackground()) return Result.success()
         repository.refreshWorld(now, localDateTime.hour)
+        if (repository.saveHealth.value != de.loems.app.data.SaveHealth.READY) return Result.retry()
         val state = repository.currentState(now)
-        if (!state.isHatched(now)) return Result.success()
+        if (!state.isHatched(now) || LoemLifecycle.hasDeparted(state, now)) return Result.success()
 
         createChannels(applicationContext)
         if (!notificationsAllowed(applicationContext)) return Result.success()
@@ -111,6 +114,11 @@ class LoemNotificationWorker(
     }
 
     private fun show(id: Int, channelId: String, title: String, text: String) {
+        if (
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(applicationContext, Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) return
         val openApp = Intent(applicationContext, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
         }

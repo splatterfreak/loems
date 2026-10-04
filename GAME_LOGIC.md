@@ -57,6 +57,41 @@ plus einem weiteren Generationslevel. Beispiel: G1 erreicht Level und Maximum `9
 auf Level `3` und kann Level `13` erreichen. Dieselbe Formel wird für jede spätere Generation
 erneut auf deren tatsächlich erreichtes Level und deren bisheriges Maximum angewendet.
 
+Der Weg vom vererbten Start-Level bis zum neuen Maximallevel benötigt in jeder Generation
+insgesamt `5.700 EP` und damit denselben Gesamtaufwand wie Level `1` bis `9` in Generation 1.
+Die EP werden entlang der weiterhin ansteigenden Levelkurve auf die verfügbaren Levelaufstiege
+verteilt. Weil spätere Generationen mehr Levelaufstiege enthalten, fällt der durchschnittliche
+EP-Bedarf pro Level und die Kurve flacht generationsweise ab.
+
+Ein regulärer Generationswechsel beginnt, wenn das Löm seinen persönlichen Abschiedszeitpunkt
+zwischen dem 31. und 33. Lebenstag erreicht. Es hinterlässt ein neues Ei. Für das nächste Löm
+kann höchstens eine sichtbare Eigenschaft gewählt werden: die bisherige Farbe, das bisherige
+Geschlecht oder das bisherige Element. Alternativ kann ausdrücklich keine Eigenschaft übernommen
+werden. Alle nicht gewählten Eigenschaften werden neu ausgelost.
+Ab Generation 3 unterscheidet sich die neu ausgeloste Farbe garantiert von der Farbe des
+Eltern-Löms. Nur die ausdrückliche Wahl „Farbe übernehmen“ erlaubt weiterhin dieselbe Farbe.
+Das Ei schlüpft wie in Generation 1 nach fünf Minuten. Design- und
+Benachrichtigungseinstellungen bleiben erhalten.
+
+Beim Wechsel wird das Eltern-Löm dauerhaft in der Familienchronik gespeichert: Name,
+Generation, Farbe, Geschlecht, Element, letzte Evolutionsform und erreichtes Kampf-Level.
+Zusätzlich werden gewonnene und verlorene Kämpfe gespeichert; die Stammbaumansicht berechnet
+daraus die Gewinnquote und zeigt ein statisches, eingefärbtes Porträt der letzten Form.
+Gespeichert werden außerdem Schlüpfdatum, persönlicher Abschiedszeitpunkt und das Alter beim
+Abschied. Wird die App erst später geöffnet, bleibt der ursprünglich berechnete Abschiedszeitpunkt
+maßgeblich; ein im Debug-Modus ausgelöster Abschied verwendet den tatsächlichen Auslösezeitpunkt.
+In der Ahnengalerie werden Schlüpf- und Abschiedszeitpunkt nur als Kalenderdatum angezeigt.
+Vor ihrer Freischaltung ist die Galerie im Eigenschaften-Bereich vollständig unsichtbar und wird
+auch nicht angekündigt. Sobald Generation 2 nach dem Schlüpfen ihren Namen erhalten hat, wird die
+Ahnengalerie dauerhaft freigeschaltet. Die kurze Konfetti-Animation und der Erklärungstext
+erscheinen genau einmal beim ersten anschließenden Öffnen des Status-Bereichs, nicht unmittelbar
+nach der Freischaltung.
+
+Nach jedem Schlüpfen muss der Name einmal bestätigt werden; das Eingabefeld schlägt `Löm` vor.
+Der bestätigte Name ist für die gesamte Generation unveränderlich. Spielstände, die bereits vor
+Einführung dieser Regel existierten, behalten ihren bisherigen Namen und gelten automatisch als
+bestätigt.
+
 ### Zufällige Eigenschaften
 
 - Geschlecht: männlich oder weiblich, gleichverteilt.
@@ -439,7 +474,15 @@ Gewichtsprofil und Statuswerte sind für beide Geschlechter identisch; nur die S
 Anzeigename unterscheiden sich. Prunkschlangen- und Haufen-Löms besitzen aktuell weiterhin
 keine dritte automatische Evolution.
 
-Die technische Evolutionsstufe ist auf `3` begrenzt.
+### Raumriss-Evolution
+
+Die vier Pfade können sich auf Evolutionsstufe `3` zu ihrer geschlechtsneutralen
+Raumriss-Form entwickeln. Der persönliche Zeitpunkt liegt deterministisch zwischen dem 25. und
+27. Lebenstag. Zusätzlich muss Kampf-Level `5` erreicht sein. Ist das Level am persönlichen
+Zeitpunkt noch nicht erreicht, erfolgt die Evolution beim ersten späteren Welt-Update nach
+Erreichen von Level `5`.
+
+Die technische Evolutionsstufe ist auf `4` begrenzt.
 
 ## 13. Battle-Werte
 
@@ -516,6 +559,13 @@ Ein Löm ist erst ab Evolutionsstufe `1` und mit mindestens `15` Gesundheit kamp
 junge oder zu stark angeschlagene Löm kann weder sichtbar geschaltet werden noch
 Herausforderungen senden oder annehmen. Sinkt die Gesundheit während der WLAN-Sichtbarkeit
 unter diese Grenze, wird der lokale Kampfmodus beendet.
+
+Nach dem Senden einer WLAN-Herausforderung ersetzt eine exklusive Warteansicht die Teilnehmerliste
+und alle übrigen Kampfmodus-Aktionen. Sie zeigt nur den herausgeforderten Namen, einen visuellen
+20-Sekunden-Countdown und die Aktion zum Abbrechen. Nach Abbruch oder Zeitablauf wird die
+Herausforderungs-ID ungültig. Eine Annahme startet den Kampf erst nach einer zusätzlichen
+Bestätigung durch das weiterhin wartende Herausforderergerät; verspätete Annahmen können daher
+keinen Kampf mehr auslösen.
 
 Zu Kampfbeginn werden Name, Element, Form, Stärke, Verteidigung und Siege als Snapshot fixiert.
 Erst nachdem beide Snapshots vorliegen, werden die beiden angepassten Stärkewerte berechnet:

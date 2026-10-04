@@ -25,6 +25,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -45,6 +46,13 @@ data class PendingLocalChallenge(
     val defense: Int,
 )
 
+data class OutgoingLocalChallenge(
+    val id: String,
+    val opponentName: String,
+    val expiresAtMillis: Long,
+    val accepted: Boolean = false,
+)
+
 data class LocalBattleEvent(
     val id: String,
     val result: LoemBattleResult,
@@ -54,6 +62,7 @@ data class LocalBattleUiState(
     val visible: Boolean = false,
     val busy: Boolean = false,
     val opponents: List<LocalBattleOpponent> = emptyList(),
+    val outgoingChallenge: OutgoingLocalChallenge? = null,
     val pendingChallenge: PendingLocalChallenge? = null,
     val resultEvent: LocalBattleEvent? = null,
     val error: String? = null,
@@ -81,6 +90,13 @@ class LocalBattleManager(
     private var registrationListener: NsdManager.RegistrationListener? = null
     private var discoveryListener: NsdManager.DiscoveryListener? = null
     private var pendingDecision: CompletableDeferred<Boolean>? = null
+    private val outgoingChallengeLock = Any()
+    private var activeOutgoingChallengeId: String? = null
+    private var outgoingChallengeJob: Job? = null
+    private var outgoingTimeoutJob: Job? = null
+
+    @Volatile
+    private var outgoingSocket: Socket? = null
 
     @Volatile
     private var registeredServiceName: String? = null
@@ -117,6 +133,7 @@ class LocalBattleManager(
     }
 
     fun stop() {
+        cancelOutgoingChallengeInternal(timedOut = false)
         registrationListener?.let { runCatching { nsdManager.unregisterService(it) } }
         discoveryListener?.let { runCatching { nsdManager.stopServiceDiscovery(it) } }
         registrationListener = null
@@ -136,43 +153,73 @@ class LocalBattleManager(
     fun challenge(opponentId: String) {
         val snapshot = localSnapshot ?: return
         val service = synchronized(services) { services[opponentId] } ?: return
-        if (_state.value.busy) return
-        _state.value = _state.value.copy(busy = true, error = null, resultEvent = null)
-        scope.launch {
+        val matchId = UUID.randomUUID().toString()
+        val expiresAtMillis = System.currentTimeMillis() + OUTGOING_CHALLENGE_TIMEOUT_MILLIS
+        synchronized(outgoingChallengeLock) {
+            if (_state.value.busy || activeOutgoingChallengeId != null) return
+            activeOutgoingChallengeId = matchId
+            _state.value = _state.value.copy(
+                busy = true,
+                outgoingChallenge = OutgoingLocalChallenge(
+                    id = matchId,
+                    opponentName = opponentId.removePrefix("Loems-").substringBeforeLast('-'),
+                    expiresAtMillis = expiresAtMillis,
+                ),
+                error = null,
+                resultEvent = null,
+            )
+        }
+        outgoingTimeoutJob = scope.launch {
+            delay(OUTGOING_CHALLENGE_TIMEOUT_MILLIS)
+            cancelOutgoingChallengeInternal(matchId = matchId, timedOut = true)
+        }
+        outgoingChallengeJob = scope.launch {
             val resolved = runCatching { resolve(service) }.getOrNull()
             if (resolved == null) {
-                _state.value = _state.value.copy(busy = false, error = "Gegner nicht erreichbar.")
+                finishOutgoingChallenge(matchId, "Gegner nicht erreichbar.")
                 return@launch
             }
             runCatching {
-                val matchId = UUID.randomUUID().toString()
                 Socket(resolved.host, resolved.port).use { socket ->
-                    socket.soTimeout = 35_000
+                    if (!registerOutgoingSocket(matchId, socket)) return@use
+                    val remainingMillis = expiresAtMillis - System.currentTimeMillis()
+                    if (remainingMillis <= 0L) return@use
+                    socket.soTimeout = remainingMillis.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
                     val writer = socket.writer()
                     val reader = socket.reader()
                     writer.writeLine(BattleProtocol.challenge(matchId, snapshot))
                     when (val response = reader.readLine()) {
-                        "DECLINED" -> _state.value = _state.value.copy(
-                            busy = false,
-                            error = "Die Herausforderung wurde abgelehnt.",
+                        "DECLINED" -> finishOutgoingChallenge(
+                            matchId,
+                            "Die Herausforderung wurde abgelehnt.",
                         )
-                        null -> error("Verbindung wurde beendet.")
-                        else -> {
-                            val result = BattleProtocol.result(response, snapshot.name)
+                        "ACCEPTED" -> {
+                            if (!markOutgoingChallengeAccepted(matchId)) return@use
+                            writer.writeLine("CONFIRM")
+                            socket.soTimeout = RESULT_TIMEOUT_MILLIS
+                            val resultResponse = reader.readLine()
+                                ?: error("Verbindung wurde beendet.")
+                            val result = BattleProtocol.result(resultResponse, snapshot.name)
                                 ?: error("Ungültige Kampfantwort.")
+                            if (!finishOutgoingChallenge(matchId)) return@use
                             val event = LocalBattleEvent(matchId, result)
                             onBattleResult(event)
-                            _state.value = _state.value.copy(
-                                busy = false,
-                                resultEvent = event,
-                            )
+                            _state.value = _state.value.copy(resultEvent = event)
                         }
+                        null -> error("Verbindung wurde beendet.")
+                        else -> error("Ungültige Kampfantwort.")
                     }
                 }
             }.onFailure { error ->
-                _state.value = _state.value.copy(busy = false, error = error.userMessage())
+                finishOutgoingChallenge(matchId, error.userMessage())
+            }.also {
+                unregisterOutgoingSocket(matchId)
             }
         }
+    }
+
+    fun cancelOutgoingChallenge() {
+        cancelOutgoingChallengeInternal(timedOut = false)
     }
 
     fun respondToChallenge(accept: Boolean) {
@@ -216,7 +263,7 @@ class LocalBattleManager(
                 writer.writeLine("DECLINED")
                 return
             }
-            if (pendingDecision != null) {
+            if (pendingDecision != null || hasActiveOutgoingChallenge()) {
                 writer.writeLine("DECLINED")
                 return
             }
@@ -231,13 +278,18 @@ class LocalBattleManager(
                 ),
                 error = null,
             )
-            val accepted = withTimeoutOrNull(30_000) { decision.await() } == true
+            val accepted = withTimeoutOrNull(INCOMING_CHALLENGE_TIMEOUT_MILLIS) {
+                decision.await()
+            } == true
             pendingDecision = null
             _state.value = _state.value.copy(pendingChallenge = null)
             if (!accepted) {
                 writer.writeLine("DECLINED")
                 return
             }
+            writer.writeLine("ACCEPTED")
+            socket.soTimeout = CONFIRM_TIMEOUT_MILLIS
+            if (runCatching { reader.readLine() }.getOrNull() != "CONFIRM") return
             val host = localSnapshot ?: run {
                 writer.writeLine("DECLINED")
                 return
@@ -320,6 +372,88 @@ class LocalBattleManager(
         )
     }
 
+    private fun registerOutgoingSocket(matchId: String, socket: Socket): Boolean =
+        synchronized(outgoingChallengeLock) {
+            if (activeOutgoingChallengeId != matchId) {
+                false
+            } else {
+                outgoingSocket = socket
+                true
+            }
+        }
+
+    private fun hasActiveOutgoingChallenge(): Boolean = synchronized(outgoingChallengeLock) {
+        activeOutgoingChallengeId != null
+    }
+
+    private fun unregisterOutgoingSocket(matchId: String) {
+        synchronized(outgoingChallengeLock) {
+            if (activeOutgoingChallengeId == matchId) outgoingSocket = null
+        }
+    }
+
+    private fun markOutgoingChallengeAccepted(matchId: String): Boolean =
+        synchronized(outgoingChallengeLock) {
+            if (!isCurrentOutgoingChallenge(activeOutgoingChallengeId, matchId)) {
+                false
+            } else {
+                outgoingTimeoutJob?.cancel()
+                outgoingTimeoutJob = null
+                _state.value = _state.value.copy(
+                    outgoingChallenge = _state.value.outgoingChallenge?.copy(accepted = true),
+                )
+                true
+            }
+        }
+
+    private fun finishOutgoingChallenge(matchId: String, error: String? = null): Boolean =
+        synchronized(outgoingChallengeLock) {
+            if (activeOutgoingChallengeId != matchId) {
+                false
+            } else {
+                activeOutgoingChallengeId = null
+                outgoingTimeoutJob?.cancel()
+                outgoingTimeoutJob = null
+                outgoingSocket = null
+                outgoingChallengeJob = null
+                _state.value = _state.value.copy(
+                    busy = false,
+                    outgoingChallenge = null,
+                    error = error,
+                )
+                true
+            }
+        }
+
+    private fun cancelOutgoingChallengeInternal(
+        matchId: String? = activeOutgoingChallengeId,
+        timedOut: Boolean,
+    ) {
+        val socketToClose: Socket?
+        val jobToCancel: Job?
+        synchronized(outgoingChallengeLock) {
+            if (matchId == null || activeOutgoingChallengeId != matchId) return
+            activeOutgoingChallengeId = null
+            socketToClose = outgoingSocket
+            outgoingSocket = null
+            jobToCancel = outgoingChallengeJob
+            outgoingChallengeJob = null
+            outgoingTimeoutJob?.cancel()
+            outgoingTimeoutJob = null
+            _state.value = _state.value.copy(
+                busy = false,
+                outgoingChallenge = null,
+                error = if (timedOut) {
+                    "Die Herausforderung ist nach 20 Sekunden abgelaufen."
+                } else {
+                    null
+                },
+            )
+        }
+        runCatching { socketToClose?.close() }
+        jobToCancel?.cancel()
+    }
+
     private suspend fun resolve(service: NsdServiceInfo): NsdServiceInfo? =
         suspendCancellableCoroutine { continuation ->
             val completed = AtomicBoolean(false)
@@ -347,6 +481,10 @@ class LocalBattleManager(
     private companion object {
         const val SERVICE_TYPE = "_loems-battle._tcp."
         const val DEVICE_TOKEN_ATTRIBUTE = "device"
+        const val OUTGOING_CHALLENGE_TIMEOUT_MILLIS = 20_000L
+        const val INCOMING_CHALLENGE_TIMEOUT_MILLIS = 20_000L
+        const val CONFIRM_TIMEOUT_MILLIS = 5_000
+        const val RESULT_TIMEOUT_MILLIS = 5_000
     }
 }
 
@@ -358,6 +496,11 @@ internal fun isOwnBattleService(
 ): Boolean = advertisedToken == deviceToken ||
     serviceName == registeredServiceName ||
     serviceName.contains("-$deviceToken")
+
+internal fun isCurrentOutgoingChallenge(
+    activeChallengeId: String?,
+    responseChallengeId: String,
+): Boolean = activeChallengeId != null && activeChallengeId == responseChallengeId
 
 private data class ChallengeRequest(
     val matchId: String,

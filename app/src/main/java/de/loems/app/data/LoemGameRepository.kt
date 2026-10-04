@@ -8,21 +8,24 @@ import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
-import androidx.datastore.preferences.preferencesDataStore
 import de.loems.app.BuildConfig
 import de.loems.app.domain.EvolutionPath
 import de.loems.app.domain.EVOLUTION_COUNT
 import de.loems.app.domain.FoodType
+import de.loems.app.domain.GenerationInheritance
 import de.loems.app.domain.INITIAL_HAPPINESS
 import de.loems.app.domain.INITIAL_HEALTH
 import de.loems.app.domain.INITIAL_HUNGER
 import de.loems.app.domain.INITIAL_WEIGHT_GRAMS
+import de.loems.app.domain.HATCH_DURATION_MILLIS
 import de.loems.app.domain.LoemColor
 import de.loems.app.domain.LoemColorLottery
+import de.loems.app.domain.LoemAncestor
 import de.loems.app.domain.LoemEvolution
 import de.loems.app.domain.LoemElement
 import de.loems.app.domain.LoemGender
 import de.loems.app.domain.LoemGameState
+import de.loems.app.domain.LoemLifecycle
 import de.loems.app.domain.MAX_TRAINING_WINS_PER_WINDOW
 import de.loems.app.domain.TRAINING_BONUS_WINDOW_MILLIS
 import de.loems.app.domain.LoemBattle
@@ -34,11 +37,13 @@ import de.loems.app.domain.ThemeMode
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.asStateFlow
 import java.util.Calendar
+import java.util.Base64
 import java.util.TimeZone
 import kotlin.random.Random
 
-private val Context.loemDataStore by preferencesDataStore(name = "loem_game")
+private val Context.loemDataStore: ProtectedGameStore get() = LoemSaveStores.get(this)
 private const val HOUR_MILLIS = 60 * 60 * 1_000L
 
 internal fun applyScheduledPoop(
@@ -64,6 +69,93 @@ internal data class Version7FreeSyringeDecision(
     val grantSyringe: Boolean,
 )
 
+internal data class NextGenerationTraits(
+    val color: LoemColor,
+    val gender: LoemGender,
+    val element: LoemElement,
+)
+
+internal data class AncestorGalleryUnlockDecision(
+    val unlocked: Boolean,
+    val noticePending: Boolean,
+)
+
+internal fun ancestorGalleryUnlockDecision(
+    generation: Int,
+    alreadyUnlocked: Boolean,
+): AncestorGalleryUnlockDecision {
+    val unlocksNow = generation == 2 && !alreadyUnlocked
+    return AncestorGalleryUnlockDecision(
+        unlocked = alreadyUnlocked || unlocksNow,
+        noticePending = unlocksNow,
+    )
+}
+
+internal fun nextGenerationTraits(
+    previousColor: LoemColor,
+    previousGender: LoemGender,
+    randomColor: LoemColor,
+    randomGender: LoemGender,
+    previousElement: LoemElement,
+    randomElement: LoemElement,
+    inheritance: GenerationInheritance?,
+    forceDifferentColor: Boolean = false,
+): NextGenerationTraits = NextGenerationTraits(
+    color = when {
+        inheritance == GenerationInheritance.COLOR -> previousColor
+        forceDifferentColor && randomColor == previousColor ->
+            LoemColor.entries[(previousColor.ordinal + 1) % LoemColor.entries.size]
+        else -> randomColor
+    },
+    gender = if (inheritance == GenerationInheritance.GENDER) previousGender else randomGender,
+    element = if (inheritance == GenerationInheritance.ELEMENT) previousElement else randomElement,
+)
+
+internal fun encodeFamilyTree(ancestors: List<LoemAncestor>): String = ancestors.joinToString("\n") { ancestor ->
+    val encodedName = Base64.getUrlEncoder().withoutPadding()
+        .encodeToString(ancestor.name.toByteArray(Charsets.UTF_8))
+    listOf(
+        ancestor.generation,
+        encodedName,
+        ancestor.color.ordinal,
+        ancestor.gender.ordinal,
+        ancestor.element.ordinal,
+        ancestor.evolution,
+        ancestor.evolutionPath.ordinal,
+        ancestor.battleLevel,
+        ancestor.battleWins,
+        ancestor.battleLosses,
+        ancestor.hatchedAtMillis,
+        ancestor.departedAtMillis,
+        ancestor.ageHoursAtDeparture,
+    ).joinToString("|")
+}
+
+internal fun decodeFamilyTree(encoded: String?): List<LoemAncestor> {
+    if (encoded.isNullOrBlank()) return emptyList()
+    return encoded.lineSequence().mapNotNull { line ->
+        val parts = line.split('|')
+        if (parts.size !in setOf(8, 10, 13)) return@mapNotNull null
+        runCatching {
+            LoemAncestor(
+                generation = parts[0].toInt().coerceAtLeast(1),
+                name = String(Base64.getUrlDecoder().decode(parts[1]), Charsets.UTF_8),
+                color = LoemColor.entries[parts[2].toInt()],
+                gender = LoemGender.entries[parts[3].toInt()],
+                element = LoemElement.entries[parts[4].toInt()],
+                evolution = parts[5].toInt().coerceIn(0, EVOLUTION_COUNT - 1),
+                evolutionPath = EvolutionPath.entries[parts[6].toInt()],
+                battleLevel = parts[7].toInt().coerceAtLeast(1),
+                battleWins = parts.getOrNull(8)?.toInt()?.coerceAtLeast(0) ?: 0,
+                battleLosses = parts.getOrNull(9)?.toInt()?.coerceAtLeast(0) ?: 0,
+                hatchedAtMillis = parts.getOrNull(10)?.toLong()?.coerceAtLeast(0L) ?: 0L,
+                departedAtMillis = parts.getOrNull(11)?.toLong()?.coerceAtLeast(0L) ?: 0L,
+                ageHoursAtDeparture = parts.getOrNull(12)?.toLong()?.coerceAtLeast(0L) ?: 0L,
+            )
+        }.getOrNull()
+    }.toList()
+}
+
 internal fun version7FreeSyringeDecision(
     versionCode: Int,
     alreadyProcessed: Boolean,
@@ -77,16 +169,28 @@ internal fun version7FreeSyringeDecision(
 }
 
 class LoemGameRepository(private val context: Context) {
+    val saveHealth = context.loemDataStore.health.asStateFlow()
+    val recoveryNotice = context.loemDataStore.recoveryNotice.asStateFlow()
+
+    fun dismissRecoveryNotice() { context.loemDataStore.recoveryNotice.value = null }
+
+    suspend fun prepareBackground(): Boolean = context.loemDataStore.open()
+
     private object Keys {
         val bornAt = longPreferencesKey("born_at")
         val color = intPreferencesKey("color")
         val name = stringPreferencesKey("name")
+        val nameConfirmed = booleanPreferencesKey("name_confirmed")
         val gender = intPreferencesKey("gender")
         val element = intPreferencesKey("element")
         val bonusAgeHours = longPreferencesKey("bonus_age_hours")
         val evolution = intPreferencesKey("evolution")
         val evolutionPath = intPreferencesKey("evolution_path")
         val generation = intPreferencesKey("generation")
+        val familyTree = stringPreferencesKey("family_tree_v1")
+        val ancestorGalleryUnlocked = booleanPreferencesKey("ancestor_gallery_unlocked")
+        val ancestorGalleryUnlockNoticePending =
+            booleanPreferencesKey("ancestor_gallery_unlock_notice_pending")
         val hasHealingSyringe = booleanPreferencesKey("has_healing_syringe")
         val syringeAgeMilestonesProcessed = intPreferencesKey("syringe_age_milestones_processed")
         val version7FreeSyringeProcessed = booleanPreferencesKey("version_7_free_syringe_processed")
@@ -102,6 +206,7 @@ class LoemGameRepository(private val context: Context) {
         val battleWins = intPreferencesKey("battle_wins")
         val battleLosses = intPreferencesKey("battle_losses")
         val battleExperience = intPreferencesKey("battle_experience")
+        val battleStartLevel = intPreferencesKey("battle_start_level")
         val battleLevelCap = intPreferencesKey("battle_level_cap")
         val lastBattleEventId = stringPreferencesKey("last_battle_event_id")
         val pendingBattleId = stringPreferencesKey("pending_battle_id")
@@ -133,6 +238,7 @@ class LoemGameRepository(private val context: Context) {
         val lightOff = booleanPreferencesKey("light_off")
         val darkTheme = booleanPreferencesKey("dark_theme")
         val themeMode = intPreferencesKey("theme_mode")
+        val gameSounds = booleanPreferencesKey("game_sounds")
         val sleepNotifications = booleanPreferencesKey("sleep_notifications")
         val evolutionNotifications = booleanPreferencesKey("evolution_notifications")
         val poopNotifications = booleanPreferencesKey("poop_notifications")
@@ -144,6 +250,8 @@ class LoemGameRepository(private val context: Context) {
         val teddyHealingBonusPercent = intPreferencesKey("teddy_healing_bonus_percent")
         val sleepHealingRemainderPercent = intPreferencesKey("sleep_healing_remainder_percent")
         val debugForceSleep = booleanPreferencesKey("debug_force_sleep")
+        val debugDepartureTriggered = booleanPreferencesKey("debug_departure_triggered")
+        val debugDepartureTriggeredAt = longPreferencesKey("debug_departure_triggered_at")
         val poorConditionSince = longPreferencesKey("poor_condition_since")
         val lastPoorConditionPenalty = longPreferencesKey("last_poor_condition_penalty")
     }
@@ -168,12 +276,52 @@ class LoemGameRepository(private val context: Context) {
         val legacyTrainingWinLimit = ((currentTrainingWindow + 1) * MAX_TRAINING_WINS_PER_WINDOW)
             .coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
         val migratedTrainingWins = trainingSessions.coerceAtMost(legacyTrainingWinLimit)
+        val generation = (values[Keys.generation] ?: 1).coerceAtLeast(1)
+        val battleLevelCap = if (generation <= 1) {
+            LoemBattle.BASE_MAX_BATTLE_LEVEL
+        } else {
+            (values[Keys.battleLevelCap] ?: LoemBattle.BASE_MAX_BATTLE_LEVEL)
+                .coerceIn(LoemBattle.BASE_MAX_BATTLE_LEVEL, LoemBattle.MAX_SUPPORTED_BATTLE_LEVEL)
+        }
+        val storedBattleExperience = values[Keys.battleExperience] ?: 0
+        val isLegacyLaterGeneration = generation > 1 && values[Keys.battleStartLevel] == null
+        val legacyBattleProgress = if (isLegacyLaterGeneration) {
+            LoemBattle.legacyProgressForExperience(storedBattleExperience, battleLevelCap)
+        } else {
+            null
+        }
+        val battleStartLevel = if (isLegacyLaterGeneration) {
+            legacyBattleProgress!!.level
+        } else {
+            (values[Keys.battleStartLevel] ?: 1).coerceIn(1, battleLevelCap)
+        }
+        val battleExperience = if (legacyBattleProgress != null &&
+            legacyBattleProgress.experienceForNextLevel > 0
+        ) {
+            val migratedNextLevelCost = LoemBattle.experienceForNextLevel(
+                legacyBattleProgress.level,
+                battleStartLevel,
+                battleLevelCap,
+            )
+            (
+                migratedNextLevelCost.toLong() * legacyBattleProgress.experienceIntoLevel /
+                    legacyBattleProgress.experienceForNextLevel
+            ).toInt()
+        } else if (isLegacyLaterGeneration) {
+            0
+        } else {
+            storedBattleExperience
+        }
+        val nameConfirmed = values[Keys.nameConfirmed] ?: (values[Keys.bornAt] != null)
+        val ancestorGalleryUnlocked = values[Keys.ancestorGalleryUnlocked]
+            ?: (generation >= 2 && nameConfirmed)
         val state = LoemGameState(
             bornAtMillis = bornAt,
             color = LoemColor.entries.getOrElse(values[Keys.color] ?: LoemColor.GRAY.ordinal) {
                 LoemColor.GRAY
             },
             name = values[Keys.name] ?: "Löm",
+            nameConfirmed = nameConfirmed,
             gender = LoemGender.entries.getOrElse(
                 values[Keys.gender] ?: LoemGender.MALE.ordinal,
             ) { LoemGender.MALE },
@@ -185,7 +333,11 @@ class LoemGameRepository(private val context: Context) {
             evolutionPath = EvolutionPath.entries.getOrElse(
                 values[Keys.evolutionPath] ?: EvolutionPath.UNDECIDED.ordinal,
             ) { EvolutionPath.UNDECIDED },
-            generation = (values[Keys.generation] ?: 1).coerceAtLeast(1),
+            generation = generation,
+            familyTree = decodeFamilyTree(values[Keys.familyTree]),
+            ancestorGalleryUnlocked = ancestorGalleryUnlocked,
+            ancestorGalleryUnlockNoticePending =
+                values[Keys.ancestorGalleryUnlockNoticePending] ?: false,
             hasHealingSyringe = values[Keys.hasHealingSyringe] ?: false,
             syringeAgeMilestonesProcessed = values[Keys.syringeAgeMilestonesProcessed] ?: 0,
             meals = values[Keys.meals] ?: 0,
@@ -197,14 +349,10 @@ class LoemGameRepository(private val context: Context) {
             trainingWinsInWindow = values[Keys.trainingWinsInWindow] ?: 0,
             battleWins = values[Keys.battleWins] ?: 0,
             battleLosses = values[Keys.battleLosses] ?: 0,
-            battleExperience = values[Keys.battleExperience] ?: 0,
-            battleLevelCap = if ((values[Keys.generation] ?: 1) <= 1) {
-                LoemBattle.BASE_MAX_BATTLE_LEVEL
-            } else {
-                (values[Keys.battleLevelCap] ?: LoemBattle.BASE_MAX_BATTLE_LEVEL)
-                    .coerceIn(LoemBattle.BASE_MAX_BATTLE_LEVEL, LoemBattle.MAX_SUPPORTED_BATTLE_LEVEL)
-            },
-            pendingBattle = readPendingBattle(values),
+            battleExperience = battleExperience,
+            battleStartLevel = battleStartLevel,
+            battleLevelCap = battleLevelCap,
+            pendingBattle = if (isLegacyLaterGeneration) null else readPendingBattle(values),
             happiness = values[Keys.happiness] ?: INITIAL_HAPPINESS,
             lastHappinessUpdateMillis = values[Keys.lastHappinessUpdate] ?: bornAt,
             healthAtLastUpdate = values[Keys.health] ?: INITIAL_HEALTH,
@@ -223,6 +371,7 @@ class LoemGameRepository(private val context: Context) {
                 values[Keys.themeMode]
                     ?: if (values[Keys.darkTheme] == true) ThemeMode.DARK.ordinal else ThemeMode.SYSTEM.ordinal,
             ) { ThemeMode.SYSTEM },
+            gameSoundsEnabled = values[Keys.gameSounds] ?: true,
             sleepNotificationsEnabled = values[Keys.sleepNotifications] ?: false,
             evolutionNotificationsEnabled = values[Keys.evolutionNotifications] ?: false,
             poopNotificationsEnabled = values[Keys.poopNotifications] ?: false,
@@ -234,6 +383,10 @@ class LoemGameRepository(private val context: Context) {
             teddyHealingBonusPercent = values[Keys.teddyHealingBonusPercent] ?: 0,
             sleepHealingRemainderPercent = values[Keys.sleepHealingRemainderPercent] ?: 0,
             debugForceSleep = BuildConfig.DEBUG && (values[Keys.debugForceSleep] ?: false),
+            debugDepartureTriggered =
+                BuildConfig.DEBUG && (values[Keys.debugDepartureTriggered] ?: false),
+            debugDepartureTriggeredAtMillis =
+                if (BuildConfig.DEBUG) values[Keys.debugDepartureTriggeredAt] ?: 0L else 0L,
             poorConditionSinceMillis = values[Keys.poorConditionSince] ?: 0L,
             lastPoorConditionPenaltyMillis = values[Keys.lastPoorConditionPenalty] ?: 0L,
         )
@@ -317,12 +470,17 @@ class LoemGameRepository(private val context: Context) {
         values[Keys.bornAt] = state.bornAtMillis
         values[Keys.color] = state.color.ordinal
         values[Keys.name] = state.name
+        values[Keys.nameConfirmed] = state.nameConfirmed
         values[Keys.gender] = state.gender.ordinal
         values[Keys.element] = state.element.ordinal
         values[Keys.bonusAgeHours] = state.bonusAgeHours
         values[Keys.evolution] = state.evolution
         values[Keys.evolutionPath] = state.evolutionPath.ordinal
         values[Keys.generation] = state.generation.coerceAtLeast(1)
+        values[Keys.familyTree] = encodeFamilyTree(state.familyTree)
+        values[Keys.ancestorGalleryUnlocked] = state.ancestorGalleryUnlocked
+        values[Keys.ancestorGalleryUnlockNoticePending] =
+            state.ancestorGalleryUnlockNoticePending
         values[Keys.hasHealingSyringe] = state.hasHealingSyringe
         values[Keys.syringeAgeMilestonesProcessed] = state.syringeAgeMilestonesProcessed
         values[Keys.meals] = state.meals
@@ -335,6 +493,7 @@ class LoemGameRepository(private val context: Context) {
         values[Keys.battleWins] = state.battleWins
         values[Keys.battleLosses] = state.battleLosses
         values[Keys.battleExperience] = state.battleExperience
+        values[Keys.battleStartLevel] = state.battleStartLevel
         values[Keys.battleLevelCap] = state.battleLevelCap
         writePendingBattle(values, state.pendingBattle)
         values[Keys.happiness] = state.happiness
@@ -355,6 +514,7 @@ class LoemGameRepository(private val context: Context) {
         values[Keys.poopSince] = state.poopSinceMillis
         values[Keys.lightOff] = state.lightOff
         values[Keys.themeMode] = state.themeMode.ordinal
+        values[Keys.gameSounds] = state.gameSoundsEnabled
         values[Keys.sleepNotifications] = state.sleepNotificationsEnabled
         values[Keys.evolutionNotifications] = state.evolutionNotificationsEnabled
         values[Keys.poopNotifications] = state.poopNotificationsEnabled
@@ -366,17 +526,28 @@ class LoemGameRepository(private val context: Context) {
         values[Keys.teddyHealingBonusPercent] = state.teddyHealingBonusPercent
         values[Keys.sleepHealingRemainderPercent] = state.sleepHealingRemainderPercent
         values[Keys.debugForceSleep] = if (BuildConfig.DEBUG) state.debugForceSleep else false
+        values[Keys.debugDepartureTriggered] =
+            if (BuildConfig.DEBUG) state.debugDepartureTriggered else false
+        values[Keys.debugDepartureTriggeredAt] =
+            if (BuildConfig.DEBUG) state.debugDepartureTriggeredAtMillis else 0L
         values[Keys.poorConditionSince] = state.poorConditionSinceMillis
         values[Keys.lastPoorConditionPenalty] = state.lastPoorConditionPenaltyMillis
     }
 
     suspend fun ensureGameStarted(nowMillis: Long = System.currentTimeMillis()) {
-        context.loemDataStore.edit { values ->
+        context.loemDataStore.open { values ->
+            val existingGame = values[Keys.bornAt] != null
+            if (values[Keys.nameConfirmed] == null) {
+                // Existing installations keep their current immutable name;
+                // only genuinely new eggs require naming after hatching.
+                values[Keys.nameConfirmed] = existingGame
+            }
             if (values[Keys.bornAt] == null) values[Keys.bornAt] = nowMillis
             if (values[Keys.color] == null) values[Keys.color] = LoemColorLottery.draw(Random.nextInt()).ordinal
             if (values[Keys.gender] == null) values[Keys.gender] = LoemGender.entries.random().ordinal
             if (values[Keys.element] == null) values[Keys.element] = LoemElement.entries.random().ordinal
             if (values[Keys.nextPoopAt] == null) values[Keys.nextPoopAt] = nowMillis + randomPoopDelay()
+            values[Keys.generation] = 1
             val version7Gift = version7FreeSyringeDecision(
                 versionCode = BuildConfig.VERSION_CODE,
                 alreadyProcessed = values[Keys.version7FreeSyringeProcessed] == true,
@@ -389,6 +560,7 @@ class LoemGameRepository(private val context: Context) {
                     values[Keys.version7FreeSyringeNoticePending] = true
                 }
             }
+            writeState(values, readState(values, nowMillis))
         }
     }
 
@@ -402,8 +574,13 @@ class LoemGameRepository(private val context: Context) {
         nowMillis: Long = System.currentTimeMillis(),
         localHour: Int = Calendar.getInstance().get(Calendar.HOUR_OF_DAY),
     ) {
+        if (!prepareBackground()) return
         context.loemDataStore.edit { values ->
             var state = readState(values, nowMillis)
+            if (LoemLifecycle.hasDeparted(state, nowMillis)) {
+                writeState(values, state)
+                return@edit
+            }
             state = applyScheduledPoop(state, nowMillis) { randomPoopDelay() }
             state = state.applySyringeAgeReward(nowMillis)
             state = state.applySleepLightPenalty(nowMillis, localHour)
@@ -627,6 +804,13 @@ class LoemGameRepository(private val context: Context) {
         }
     }
 
+    suspend fun setGameSoundsEnabled(enabled: Boolean) {
+        context.loemDataStore.edit { values ->
+            val now = System.currentTimeMillis()
+            writeState(values, readState(values, now).copy(gameSoundsEnabled = enabled))
+        }
+    }
+
     suspend fun setNotificationSettings(
         sleep: Boolean,
         evolution: Boolean,
@@ -647,12 +831,37 @@ class LoemGameRepository(private val context: Context) {
         }
     }
 
-    suspend fun renameLoem(name: String) {
+    suspend fun confirmName(name: String, nowMillis: Long = System.currentTimeMillis()) {
         val cleaned = name.trim().take(20)
         if (cleaned.isBlank()) return
         context.loemDataStore.edit { values ->
-            val now = System.currentTimeMillis()
-            writeState(values, readState(values, now).copy(name = cleaned))
+            val state = readState(values, nowMillis)
+            if (
+                state.nameConfirmed || !state.isHatched(nowMillis) ||
+                LoemLifecycle.hasDeparted(state, nowMillis)
+            ) {
+                return@edit
+            }
+            val galleryUnlock = ancestorGalleryUnlockDecision(
+                generation = state.generation,
+                alreadyUnlocked = state.ancestorGalleryUnlocked,
+            )
+            writeState(
+                values,
+                state.copy(
+                    name = cleaned,
+                    nameConfirmed = true,
+                    ancestorGalleryUnlocked = galleryUnlock.unlocked,
+                    ancestorGalleryUnlockNoticePending = galleryUnlock.noticePending,
+                ),
+            )
+        }
+    }
+
+    suspend fun dismissAncestorGalleryUnlockNotice(nowMillis: Long = System.currentTimeMillis()) {
+        context.loemDataStore.edit { values ->
+            val state = readState(values, nowMillis)
+            writeState(values, state.copy(ancestorGalleryUnlockNoticePending = false))
         }
     }
 
@@ -691,6 +900,7 @@ class LoemGameRepository(private val context: Context) {
 
     suspend fun setDebugEvolution(evolution: Int, path: EvolutionPath) {
         context.loemDataStore.edit { values ->
+            values[debugProgressRollbackKey] = true
             val now = System.currentTimeMillis()
             val state = readState(values, now)
             val targetEvolution = evolution.coerceIn(0, EVOLUTION_COUNT - 1)
@@ -709,49 +919,119 @@ class LoemGameRepository(private val context: Context) {
         }
     }
 
+    suspend fun startNextGeneration(
+        inheritance: GenerationInheritance,
+        nowMillis: Long = System.currentTimeMillis(),
+    ) {
+        context.loemDataStore.edit { values ->
+            val previousState = readState(values, nowMillis)
+            writeNextGeneration(values, previousState, inheritance, nowMillis)
+        }
+    }
+
+    suspend fun debugTriggerDeparture(nowMillis: Long = System.currentTimeMillis()) {
+        if (!BuildConfig.DEBUG) return
+        context.loemDataStore.edit { values ->
+            values[Keys.debugDepartureTriggered] = true
+            values[Keys.debugDepartureTriggeredAt] = nowMillis
+        }
+    }
+
     suspend fun reset(nowMillis: Long = System.currentTimeMillis()) {
         context.loemDataStore.edit { values ->
             val previousState = readState(values, nowMillis)
-            val version7FreeSyringeProcessed = values[Keys.version7FreeSyringeProcessed] ?: false
-            val version7FreeSyringeNoticePending =
-                values[Keys.version7FreeSyringeNoticePending] ?: false
-            val themeMode = values[Keys.themeMode]
-                ?: if (values[Keys.darkTheme] == true) ThemeMode.DARK.ordinal else ThemeMode.SYSTEM.ordinal
-            val nextGeneration = ((values[Keys.generation] ?: 1).toLong() + 1)
-                .coerceAtMost(Int.MAX_VALUE.toLong())
-                .toInt()
-            val inheritancePercent = Random.nextInt(
-                LoemBattle.MIN_LEVEL_INHERITANCE_PERCENT,
-                LoemBattle.MAX_LEVEL_INHERITANCE_PERCENT + 1,
-            )
-            val previousBattleLevel = LoemBattle.levelProgress(
-                previousState.battleExperience,
-                previousState.battleLevelCap,
-            ).level
-            val inheritedStartLevel = LoemBattle.inheritedBattleStartLevel(
-                previousLevel = previousBattleLevel,
-                inheritancePercent = inheritancePercent,
-            )
-            val nextBattleLevelCap = LoemBattle.nextBattleLevelCap(
-                previousCap = previousState.battleLevelCap,
-                inheritedStartLevel = inheritedStartLevel,
-            )
-            values.clear()
-            values[Keys.version7FreeSyringeProcessed] = version7FreeSyringeProcessed
-            values[Keys.version7FreeSyringeNoticePending] = version7FreeSyringeNoticePending
-            values[Keys.bornAt] = nowMillis
-            values[Keys.generation] = nextGeneration
-            values[Keys.battleLevelCap] = nextBattleLevelCap
-            values[Keys.battleExperience] = LoemBattle.experienceToReachLevel(
-                inheritedStartLevel,
-                nextBattleLevelCap,
-            )
-            values[Keys.color] = LoemColorLottery.draw(Random.nextInt()).ordinal
-            values[Keys.gender] = LoemGender.entries.random().ordinal
-            values[Keys.element] = LoemElement.entries.random().ordinal
-            values[Keys.nextPoopAt] = nowMillis + randomPoopDelay()
-            values[Keys.themeMode] = themeMode
+            writeNextGeneration(values, previousState, inheritance = null, nowMillis)
         }
+    }
+
+    private fun writeNextGeneration(
+        values: androidx.datastore.preferences.core.MutablePreferences,
+        previousState: LoemGameState,
+        inheritance: GenerationInheritance?,
+        nowMillis: Long,
+    ) {
+        val version7FreeSyringeProcessed = values[Keys.version7FreeSyringeProcessed] ?: false
+        val version7FreeSyringeNoticePending =
+            values[Keys.version7FreeSyringeNoticePending] ?: false
+        val themeMode = values[Keys.themeMode]
+            ?: if (values[Keys.darkTheme] == true) ThemeMode.DARK.ordinal else ThemeMode.SYSTEM.ordinal
+        val gameSounds = values[Keys.gameSounds] ?: true
+        val sleepNotifications = values[Keys.sleepNotifications] ?: false
+        val evolutionNotifications = values[Keys.evolutionNotifications] ?: false
+        val poopNotifications = values[Keys.poopNotifications] ?: false
+        val hungerNotifications = values[Keys.hungerNotifications] ?: false
+        val nextGeneration = (previousState.generation.toLong() + 1)
+            .coerceAtMost(Int.MAX_VALUE.toLong())
+            .toInt()
+        val inheritancePercent = Random.nextInt(
+            LoemBattle.MIN_LEVEL_INHERITANCE_PERCENT,
+            LoemBattle.MAX_LEVEL_INHERITANCE_PERCENT + 1,
+        )
+        val previousBattleLevel = LoemBattle.levelProgress(
+            previousState.battleExperience,
+            previousState.battleLevelCap,
+            previousState.battleStartLevel,
+        ).level
+        val inheritedStartLevel = LoemBattle.inheritedBattleStartLevel(
+            previousLevel = previousBattleLevel,
+            inheritancePercent = inheritancePercent,
+        )
+        val nextBattleLevelCap = LoemBattle.nextBattleLevelCap(
+            previousCap = previousState.battleLevelCap,
+            inheritedStartLevel = inheritedStartLevel,
+        )
+        val departedAtMillis = LoemLifecycle.departureAtMillis(previousState, nowMillis)
+        val parentRecord = LoemAncestor(
+            generation = previousState.generation,
+            name = previousState.name,
+            color = previousState.color,
+            gender = previousState.gender,
+            element = previousState.element,
+            evolution = previousState.evolution,
+            evolutionPath = previousState.evolutionPath,
+            battleLevel = previousBattleLevel,
+            battleWins = previousState.battleWins,
+            battleLosses = previousState.battleLosses,
+            hatchedAtMillis = previousState.bornAtMillis + HATCH_DURATION_MILLIS,
+            departedAtMillis = departedAtMillis,
+            ageHoursAtDeparture = previousState.ageHours(departedAtMillis),
+        )
+        val nextFamilyTree = previousState.familyTree + parentRecord
+        val nextTraits = nextGenerationTraits(
+            previousColor = previousState.color,
+            previousGender = previousState.gender,
+            randomColor = LoemColorLottery.draw(Random.nextInt()),
+            randomGender = LoemGender.entries.random(),
+            previousElement = previousState.element,
+            randomElement = LoemElement.entries.random(),
+            inheritance = inheritance,
+            forceDifferentColor = nextGeneration >= 3,
+        )
+
+        values.clear()
+        values[Keys.version7FreeSyringeProcessed] = version7FreeSyringeProcessed
+        values[Keys.version7FreeSyringeNoticePending] = version7FreeSyringeNoticePending
+        values[Keys.bornAt] = nowMillis
+        values[Keys.name] = "Löm"
+        values[Keys.nameConfirmed] = false
+        values[Keys.generation] = nextGeneration
+        values[Keys.familyTree] = encodeFamilyTree(nextFamilyTree)
+        values[Keys.ancestorGalleryUnlocked] = previousState.ancestorGalleryUnlocked
+        values[Keys.ancestorGalleryUnlockNoticePending] =
+            previousState.ancestorGalleryUnlockNoticePending
+        values[Keys.battleStartLevel] = inheritedStartLevel
+        values[Keys.battleLevelCap] = nextBattleLevelCap
+        values[Keys.battleExperience] = 0
+        values[Keys.color] = nextTraits.color.ordinal
+        values[Keys.gender] = nextTraits.gender.ordinal
+        values[Keys.element] = nextTraits.element.ordinal
+        values[Keys.nextPoopAt] = nowMillis + randomPoopDelay()
+        values[Keys.themeMode] = themeMode
+        values[Keys.gameSounds] = gameSounds
+        values[Keys.sleepNotifications] = sleepNotifications
+        values[Keys.evolutionNotifications] = evolutionNotifications
+        values[Keys.poopNotifications] = poopNotifications
+        values[Keys.hungerNotifications] = hungerNotifications
     }
 
     private fun randomPoopDelay(): Long = Random.nextLong(6, 13) * HOUR_MILLIS

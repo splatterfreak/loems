@@ -60,7 +60,11 @@ object LoemBattle {
         val careModifier = (1f + (careAverage / 8f) * 0.1f)
             .coerceIn(0.9f, 1.1f)
         val trainingBonus = ln(1.0 + state.trainingWins.coerceAtLeast(0)).toInt()
-        val level = levelProgress(state.battleExperience, state.battleLevelCap).level
+        val level = levelProgress(
+            state.battleExperience,
+            state.battleLevelCap,
+            state.battleStartLevel,
+        ).level
         val levelStrengthBonus = (level - 1) * STRENGTH_PER_LEVEL
         val levelDefenseBonus = (level - 1) * DEFENSE_PER_LEVEL
         return LoemBattleStats(
@@ -142,23 +146,38 @@ object LoemBattle {
             .coerceIn(MIN_WIN_EXPERIENCE, MAX_WIN_EXPERIENCE)
     }
 
-    fun experienceForNextLevel(level: Int): Int {
+    private fun baseExperienceForNextLevel(level: Int): Int {
         val step = (level.coerceAtLeast(1) - 1).toLong()
         return (100L + 50L * step + 25L * step * step).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+    }
+
+    fun experienceForNextLevel(
+        level: Int,
+        startBattleLevel: Int = 1,
+        maxBattleLevel: Int = BASE_MAX_BATTLE_LEVEL,
+    ): Int {
+        val levelCap = maxBattleLevel.coerceIn(1, MAX_SUPPORTED_BATTLE_LEVEL)
+        val startLevel = startBattleLevel.coerceIn(1, levelCap)
+        val currentLevel = level.coerceIn(startLevel, levelCap)
+        if (currentLevel >= levelCap) return 0
+        return experienceThreshold(currentLevel + 1, startLevel, levelCap) -
+            experienceThreshold(currentLevel, startLevel, levelCap)
     }
 
     fun levelProgress(
         totalExperience: Int,
         maxBattleLevel: Int = BASE_MAX_BATTLE_LEVEL,
+        startBattleLevel: Int = 1,
     ): LoemBattleLevelProgress {
         val levelCap = maxBattleLevel.coerceIn(1, MAX_SUPPORTED_BATTLE_LEVEL)
-        var level = 1
+        val startLevel = startBattleLevel.coerceIn(1, levelCap)
+        var level = startLevel
         var remaining = totalExperience.coerceAtLeast(0).toLong()
-        var needed = experienceForNextLevel(level).toLong()
+        var needed = experienceForNextLevel(level, startLevel, levelCap).toLong()
         while (remaining >= needed && level < levelCap) {
             remaining -= needed
             level += 1
-            needed = experienceForNextLevel(level).toLong()
+            needed = experienceForNextLevel(level, startLevel, levelCap).toLong()
         }
         if (level == levelCap) {
             return LoemBattleLevelProgress(
@@ -177,15 +196,64 @@ object LoemBattle {
     fun experienceToReachLevel(
         targetLevel: Int,
         maxBattleLevel: Int = BASE_MAX_BATTLE_LEVEL,
+        startBattleLevel: Int = 1,
     ): Int {
-        val cappedTarget = targetLevel.coerceIn(
-            1,
-            maxBattleLevel.coerceIn(1, MAX_SUPPORTED_BATTLE_LEVEL),
-        )
-        return (1 until cappedTarget)
-            .sumOf { experienceForNextLevel(it).toLong() }
-            .coerceAtMost(Int.MAX_VALUE.toLong())
-            .toInt()
+        val levelCap = maxBattleLevel.coerceIn(1, MAX_SUPPORTED_BATTLE_LEVEL)
+        val startLevel = startBattleLevel.coerceIn(1, levelCap)
+        return experienceThreshold(targetLevel.coerceIn(startLevel, levelCap), startLevel, levelCap)
+    }
+
+    internal fun legacyProgressForExperience(
+        totalExperience: Int,
+        maxBattleLevel: Int,
+    ): LoemBattleLevelProgress {
+        val levelCap = maxBattleLevel.coerceIn(1, MAX_SUPPORTED_BATTLE_LEVEL)
+        var level = 1
+        var remaining = totalExperience.coerceAtLeast(0).toLong()
+        while (level < levelCap) {
+            val needed = baseExperienceForNextLevel(level).toLong()
+            if (remaining < needed) break
+            remaining -= needed
+            level += 1
+        }
+        return if (level == levelCap) {
+            LoemBattleLevelProgress(level, 0, 0)
+        } else {
+            LoemBattleLevelProgress(
+                level,
+                remaining.coerceAtMost(Int.MAX_VALUE.toLong()).toInt(),
+                baseExperienceForNextLevel(level),
+            )
+        }
+    }
+
+    private fun experienceThreshold(targetLevel: Int, startLevel: Int, levelCap: Int): Int {
+        if (targetLevel <= startLevel) return 0
+        if (startLevel == 1 && levelCap == BASE_MAX_BATTLE_LEVEL) {
+            return baseExperienceSum(1, targetLevel).toInt()
+        }
+
+        val totalSteps = levelCap - startLevel
+        val completedSteps = (targetLevel - startLevel).coerceIn(0, totalSteps)
+        if (completedSteps == totalSteps) return GENERATION_EXPERIENCE_BUDGET
+
+        val totalWeight = baseExperienceSum(startLevel, levelCap)
+        val completedWeight = baseExperienceSum(startLevel, targetLevel)
+        val distributableExperience = GENERATION_EXPERIENCE_BUDGET - totalSteps
+        val weightedExperience = (
+            distributableExperience.toLong() * completedWeight + totalWeight / 2
+        ) / totalWeight
+        return completedSteps + weightedExperience.toInt()
+    }
+
+    private fun baseExperienceSum(fromLevel: Int, untilLevel: Int): Long =
+        cumulativeBaseExperience(untilLevel) - cumulativeBaseExperience(fromLevel)
+
+    private fun cumulativeBaseExperience(untilLevel: Int): Long {
+        val steps = (untilLevel - 1).coerceAtLeast(0).toLong()
+        return 100L * steps +
+            25L * steps * (steps - 1) +
+            25L * steps * (steps - 1) * (2L * steps - 1) / 6L
     }
 
     fun inheritedBattleStartLevel(previousLevel: Int, inheritancePercent: Int): Int {
@@ -222,7 +290,11 @@ object LoemBattle {
                     0
                 }
             ).coerceAtMost(
-                experienceToReachLevel(state.battleLevelCap, state.battleLevelCap).toLong(),
+                experienceToReachLevel(
+                    state.battleLevelCap,
+                    state.battleLevelCap,
+                    state.battleStartLevel,
+                ).toLong(),
             ).toInt(),
             healthAtLastUpdate = (state.currentHealth(nowMillis) - healthLoss).coerceAtLeast(0),
             lastHealthUpdateMillis = nowMillis,
@@ -277,6 +349,7 @@ object LoemBattle {
     const val STRENGTH_PER_LEVEL = 2
     const val DEFENSE_PER_LEVEL = 1
     const val BASE_MAX_BATTLE_LEVEL = 9
+    const val GENERATION_EXPERIENCE_BUDGET = 5_700
     const val MAX_SUPPORTED_BATTLE_LEVEL = 500
     const val MIN_LEVEL_INHERITANCE_PERCENT = 15
     const val MAX_LEVEL_INHERITANCE_PERCENT = 20

@@ -348,6 +348,45 @@ class LoemBattleTest {
     }
 
     @Test
+    fun laterGenerationsNeedTheSameTotalExperienceFromInheritedStartToCap() {
+        val generationTwoFromLevelTwo = LoemBattle.experienceToReachLevel(
+            targetLevel = 12,
+            maxBattleLevel = 12,
+            startBattleLevel = 2,
+        )
+        val generationTwoFromLevelThree = LoemBattle.experienceToReachLevel(
+            targetLevel = 13,
+            maxBattleLevel = 13,
+            startBattleLevel = 3,
+        )
+
+        assertEquals(LoemBattle.GENERATION_EXPERIENCE_BUDGET, generationTwoFromLevelTwo)
+        assertEquals(LoemBattle.GENERATION_EXPERIENCE_BUDGET, generationTwoFromLevelThree)
+        assertEquals(
+            12,
+            LoemBattle.levelProgress(generationTwoFromLevelTwo, 12, 2).level,
+        )
+        assertEquals(
+            13,
+            LoemBattle.levelProgress(generationTwoFromLevelThree, 13, 3).level,
+        )
+    }
+
+    @Test
+    fun inheritedStartLevelIsAvailableWithoutExperience() {
+        assertEquals(3, LoemBattle.levelProgress(0, 13, 3).level)
+        assertEquals(0, LoemBattle.experienceToReachLevel(3, 13, 3))
+    }
+
+    @Test
+    fun legacyProgressCanBeMigratedWithoutLosingTheCurrentLevel() {
+        assertEquals(
+            LoemBattleLevelProgress(level = 3, experienceIntoLevel = 25, experienceForNextLevel = 300),
+            LoemBattle.legacyProgressForExperience(totalExperience = 300, maxBattleLevel = 13),
+        )
+    }
+
+    @Test
     fun noMoreExperienceIsCollectedAtMaximumLevel() {
         val maximumExperience = LoemBattle.experienceToReachLevel(LoemBattle.BASE_MAX_BATTLE_LEVEL)
         val state = LoemGameState(bornAtMillis = 0, battleExperience = maximumExperience)

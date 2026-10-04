@@ -15,6 +15,7 @@ import androidx.core.content.ContextCompat
 import de.loems.app.data.LoemGameRepository
 import de.loems.app.notifications.LoemNotificationWorker
 import de.loems.app.ui.LoemsApp
+import de.loems.app.ui.SaveProtectionGate
 import de.loems.app.ui.theme.LoemsTheme
 import de.loems.app.domain.ThemeMode
 import com.google.android.play.core.appupdate.AppUpdateManager
@@ -46,20 +47,22 @@ class MainActivity : ComponentActivity() {
                 ThemeMode.DARK -> true
             }
             LoemsTheme(darkTheme = darkTheme) {
-                LoemsApp(
-                    repository = repository,
-                    onRequestNotificationPermission = {
-                        if (
-                            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-                            ContextCompat.checkSelfPermission(
-                                this,
-                                Manifest.permission.POST_NOTIFICATIONS,
-                            ) != PackageManager.PERMISSION_GRANTED
-                        ) {
-                            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                        }
-                    },
-                )
+                SaveProtectionGate(repository) {
+                    LoemsApp(
+                        repository = repository,
+                        onRequestNotificationPermission = {
+                            if (
+                                Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                                ContextCompat.checkSelfPermission(
+                                    this,
+                                    Manifest.permission.POST_NOTIFICATIONS,
+                                ) != PackageManager.PERMISSION_GRANTED
+                            ) {
+                                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                            }
+                        },
+                    )
+                }
             }
         }
     }

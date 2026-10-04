@@ -10,8 +10,11 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.compose.BackHandler
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -22,25 +25,32 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.border
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.FitnessCenter
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Restaurant
@@ -50,9 +60,15 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -69,14 +85,18 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
@@ -85,8 +105,12 @@ import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
@@ -113,9 +137,13 @@ import de.loems.app.domain.MAX_TRAINING_WINS_PER_WINDOW
 import de.loems.app.domain.TRAINING_BONUS_WINDOW_MILLIS
 import de.loems.app.domain.EvolutionPath
 import de.loems.app.domain.FoodType
+import de.loems.app.domain.GenerationInheritance
+import de.loems.app.domain.LoemLifecycle
+import de.loems.app.domain.LoemAncestor
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.abs
+import kotlin.math.ceil
 import kotlin.math.PI
 import kotlin.math.sin
 import java.util.Calendar
@@ -127,7 +155,7 @@ private enum class LoemsTab(val title: String) {
     TRAIN("Training"),
     BATTLE("Battle"),
     PROPERTIES("Status"),
-    SETTINGS("Optionen"),
+    SETTINGS("Einstellungen"),
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -155,15 +183,25 @@ fun LoemsApp(
         }
     }
     val battleState by battleManager.state.collectAsState()
-    var selectedTab by remember { mutableStateOf(LoemsTab.HOME) }
+    var selectedTab by rememberSaveable { mutableStateOf(LoemsTab.HOME) }
+    var previousTab by rememberSaveable { mutableStateOf(LoemsTab.HOME) }
+    val tabStateHolder = rememberSaveableStateHolder()
     var debugBattleAnimationActive by remember { mutableStateOf(false) }
     var nowMillis by remember { mutableLongStateOf(System.currentTimeMillis()) }
     val debugSpritePreviews = remember { debugSpritePreviews() }
     var debugSpritePreview by remember { mutableStateOf<DebugSpritePreview?>(null) }
+    var ancestorUnlockCelebrating by remember { mutableStateOf(false) }
+    var ancestorUnlockDialogVisible by remember { mutableStateOf(false) }
     val pendingBattle = state?.pendingBattle
+    val departureActive = state?.let { LoemLifecycle.hasDeparted(it, nowMillis) } == true
+    val namingActive = state?.let {
+        it.isHatched(nowMillis) && !it.nameConfirmed && !LoemLifecycle.hasDeparted(it, nowMillis)
+    } == true
+    val generationRewardActive = ancestorUnlockCelebrating || ancestorUnlockDialogVisible
     val persistedBattleActive = pendingBattle != null && nowMillis < pendingBattle.revealAtMillis
     val battleNavigationLocked =
-        persistedBattleActive || debugBattleAnimationActive
+        persistedBattleActive || debugBattleAnimationActive || departureActive || namingActive ||
+            generationRewardActive
     val localNetworkPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
@@ -193,7 +231,10 @@ fun LoemsApp(
     LaunchedEffect(state?.poopSinceMillis) {
         val currentPoopSinceMillis = state?.poopSinceMillis ?: return@LaunchedEffect
         val previousPoopSinceMillis = observedPoopSinceMillis
-        if (previousPoopSinceMillis == 0L && currentPoopSinceMillis > 0L) {
+        if (
+            state?.gameSoundsEnabled == true &&
+            previousPoopSinceMillis == 0L && currentPoopSinceMillis > 0L
+        ) {
             poopSoundPlayer.playFart()
         }
         observedPoopSinceMillis = currentPoopSinceMillis
@@ -201,7 +242,10 @@ fun LoemsApp(
 
     LaunchedEffect(state) {
         state?.let { current ->
-            if (!LoemBattle.canBattle(current, System.currentTimeMillis())) {
+            if (
+                LoemLifecycle.hasDeparted(current, System.currentTimeMillis()) ||
+                !LoemBattle.canBattle(current, System.currentTimeMillis())
+            ) {
                 battleManager.stop()
                 return@let
             }
@@ -221,6 +265,16 @@ fun LoemsApp(
         }
     }
 
+    LaunchedEffect(selectedTab, state?.ancestorGalleryUnlockNoticePending) {
+        if (
+            selectedTab == LoemsTab.PROPERTIES &&
+            state?.ancestorGalleryUnlockNoticePending == true
+        ) {
+            ancestorUnlockCelebrating = true
+            repository.dismissAncestorGalleryUnlockNotice()
+        }
+    }
+
     LaunchedEffect(Unit) {
         repository.ensureGameStarted()
         repository.refreshWorld()
@@ -236,17 +290,49 @@ fun LoemsApp(
         }
     }
 
+    BackHandler(enabled = !battleNavigationLocked && selectedTab != LoemsTab.HOME) {
+        selectedTab = if (selectedTab == LoemsTab.SETTINGS) previousTab else LoemsTab.HOME
+    }
+
     Scaffold(
         modifier = Modifier.fillMaxSize(),
         topBar = {
             TopAppBar(
-                modifier = Modifier.statusBarsPadding(),
-                title = { Text("Löms", fontWeight = FontWeight.Bold) },
+                title = {
+                    Text(
+                        when {
+                            namingActive -> "Willkommen"
+                            departureActive -> "Neue Generation"
+                            pendingBattle != null -> "Battle"
+                            else -> selectedTab.title
+                        },
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                },
+                navigationIcon = {
+                    if (selectedTab == LoemsTab.SETTINGS && !battleNavigationLocked) {
+                        IconButton(onClick = { selectedTab = previousTab }, enabled = !battleNavigationLocked) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Zurück")
+                        }
+                    }
+                },
+                actions = {
+                    if (selectedTab != LoemsTab.SETTINGS && !battleNavigationLocked) {
+                        IconButton(
+                            onClick = { previousTab = selectedTab; selectedTab = LoemsTab.SETTINGS },
+                            enabled = !battleNavigationLocked,
+                        ) {
+                            Icon(Icons.Default.Settings, contentDescription = "Einstellungen öffnen")
+                        }
+                    }
+                },
             )
         },
         bottomBar = {
-            NavigationBar(modifier = Modifier.navigationBarsPadding()) {
-                LoemsTab.entries.forEach { tab ->
+            if (!departureActive && !namingActive) NavigationBar {
+                LoemsTab.entries.filter { it != LoemsTab.SETTINGS }.forEach { tab ->
                     NavigationBarItem(
                         selected = selectedTab == tab,
                         enabled = !battleNavigationLocked,
@@ -277,15 +363,40 @@ fun LoemsApp(
             }
         } else {
             Box(Modifier.fillMaxSize().padding(padding)) {
-                if (persistedBattleActive) {
+                if (LoemLifecycle.hasDeparted(gameState, nowMillis)) {
+                    FarewellScreen(
+                        state = gameState,
+                        onStartNextGeneration = { inheritance ->
+                            scope.launch {
+                                repository.startNextGeneration(inheritance)
+                                LoemNotificationWorker.resetMarkers(context)
+                                selectedTab = LoemsTab.HOME
+                            }
+                        },
+                    )
+                } else if (gameState.isHatched(nowMillis) && !gameState.nameConfirmed) {
+                    NamingScreen(
+                        generation = gameState.generation,
+                        onConfirm = { name ->
+                            scope.launch {
+                                repository.confirmName(name)
+                                selectedTab = LoemsTab.HOME
+                            }
+                        },
+                    )
+                } else if (persistedBattleActive) {
                     val activeBattle = checkNotNull(pendingBattle)
                     BattleSequence(
                         state = gameState,
                         result = activeBattle.result,
                         startedAtMillis = activeBattle.startedAtMillis,
+                        soundsEnabled = gameState.gameSoundsEnabled,
                         onComplete = { nowMillis = System.currentTimeMillis() },
                     )
-                } else when (if (pendingBattle != null) LoemsTab.BATTLE else selectedTab) {
+                } else {
+                val activeTab = if (pendingBattle != null) LoemsTab.BATTLE else selectedTab
+                tabStateHolder.SaveableStateProvider("${gameState.bornAtMillis}-${activeTab.name}") {
+                when (activeTab) {
                     LoemsTab.HOME -> HomeScreen(
                         state = gameState,
                         nowMillis = nowMillis,
@@ -293,9 +404,10 @@ fun LoemsApp(
                         onLightChange = { off -> scope.launch { repository.setLightOff(off) } },
                         onPlaceSleepTeddy = { scope.launch { repository.placeSleepTeddy() } },
                         onRemoveSleepTeddy = { scope.launch { repository.removeSleepTeddy() } },
-                        onFlushSound = { poopSoundPlayer.playFlush() },
+                        onFlushSound = {
+                            if (gameState.gameSoundsEnabled) poopSoundPlayer.playFlush()
+                        },
                         onFlush = { scope.launch { repository.flushPoop() } },
-                        onRename = { name -> scope.launch { repository.renameLoem(name) } },
                     )
                     LoemsTab.FEED -> FeedScreen(
                         state = gameState,
@@ -344,6 +456,7 @@ fun LoemsApp(
                             }
                         },
                         onChallenge = battleManager::challenge,
+                        onCancelChallenge = battleManager::cancelOutgoingChallenge,
                         onRespondToChallenge = battleManager::respondToChallenge,
                         onClearError = battleManager::clearError,
                         onDismissResult = { eventId ->
@@ -351,6 +464,7 @@ fun LoemsApp(
                             scope.launch { repository.consumeBattleResult(eventId) }
                         },
                         onBattleAnimationActiveChange = { debugBattleAnimationActive = it },
+                        onOpenCare = { selectedTab = LoemsTab.FEED },
                     )
                     LoemsTab.PROPERTIES -> PropertiesScreen(gameState, nowMillis)
                     LoemsTab.SETTINGS -> SettingsScreen(
@@ -368,8 +482,14 @@ fun LoemsApp(
                         onDebugForceSleep = { force ->
                             scope.launch { repository.setDebugForceSleep(force) }
                         },
+                        onDebugTriggerDeparture = {
+                            scope.launch { repository.debugTriggerDeparture() }
+                        },
                         onThemeModeChange = { mode ->
                             scope.launch { repository.setThemeMode(mode) }
+                        },
+                        onGameSoundsChange = { enabled ->
+                            scope.launch { repository.setGameSoundsEnabled(enabled) }
                         },
                         onNotificationSettingsChange = { sleep, evolution, poop, hunger ->
                             if (sleep || evolution || poop || hunger) {
@@ -387,11 +507,13 @@ fun LoemsApp(
                         },
                     )
                 }
+                }
+                }
             }
         }
     }
 
-    if (version7FreeSyringeNoticePending) {
+    if (version7FreeSyringeNoticePending && !generationRewardActive) {
         AlertDialog(
             onDismissRequest = {
                 scope.launch { repository.dismissVersion7FreeSyringeNotice() }
@@ -414,6 +536,263 @@ fun LoemsApp(
             },
         )
     }
+
+    if (ancestorUnlockDialogVisible) {
+        AlertDialog(
+            onDismissRequest = {},
+            title = { Text("Ahnengalerie freigeschaltet!") },
+            text = {
+                Text(
+                    "Deine Familie wächst! Im Status findest du ab jetzt die Ahnengalerie. " +
+                        "Dort bleiben frühere Löms mit ihren wichtigsten Erinnerungen erhalten.",
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        selectedTab = LoemsTab.PROPERTIES
+                        ancestorUnlockDialogVisible = false
+                    },
+                ) {
+                    Text("Galerie ansehen")
+                }
+            },
+        )
+    }
+
+    if (ancestorUnlockCelebrating) {
+        AncestorGalleryUnlockConfetti(
+            onFinished = {
+                ancestorUnlockCelebrating = false
+                ancestorUnlockDialogVisible = true
+            },
+        )
+    }
+}
+
+private data class UnlockConfettiParticle(
+    val xFraction: Float,
+    val startFraction: Float,
+    val speed: Float,
+    val drift: Float,
+    val size: Float,
+    val color: Color,
+)
+
+@Composable
+private fun AncestorGalleryUnlockConfetti(onFinished: () -> Unit) {
+    val progress = remember { Animatable(0f) }
+    val colors = remember {
+        listOf(
+            Color(0xFFFFD54F),
+            Color(0xFFFF6B6B),
+            Color(0xFF5B9DFF),
+            Color(0xFF58B867),
+            Color(0xFFB66DFF),
+            Color(0xFFFF8A3D),
+        )
+    }
+    val particles = remember {
+        List(160) { index ->
+            UnlockConfettiParticle(
+                xFraction = ((index * 47) % 101) / 100f,
+                startFraction = -0.35f - ((index * 29) % 80) / 100f,
+                speed = 1.15f + ((index * 17) % 70) / 100f,
+                drift = (((index * 31) % 41) - 20) / 100f,
+                size = 7f + (index % 5) * 2f,
+                color = colors[index % colors.size],
+            )
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        progress.animateTo(
+            targetValue = 1f,
+            animationSpec = tween(durationMillis = 1_800, easing = LinearEasing),
+        )
+        onFinished()
+    }
+
+    Canvas(modifier = Modifier.fillMaxSize()) {
+        particles.forEachIndexed { index, particle ->
+            val wave = sin((progress.value * 8f + index) * 0.9f)
+            val x = particle.xFraction * size.width +
+                wave * particle.drift * size.width
+            val yFraction = particle.startFraction + progress.value * particle.speed
+            val y = yFraction * size.height
+            if (y >= -particle.size && y <= size.height + particle.size) {
+                drawRect(
+                    color = particle.color,
+                    topLeft = Offset(x, y),
+                    size = Size(particle.size, particle.size * 0.6f),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun NamingScreen(
+    generation: Int,
+    onConfirm: (String) -> Unit,
+) {
+    var name by rememberSaveable(generation) { mutableStateOf("Löm") }
+    Column(
+        modifier = Modifier.fillMaxSize().imePadding().verticalScroll(rememberScrollState()).padding(16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Text(
+            "Dein Löm ist geschlüpft!",
+            style = MaterialTheme.typography.headlineMedium,
+            fontWeight = FontWeight.Bold,
+        )
+        Spacer(Modifier.height(10.dp))
+        Text(
+            "Gib Generation $generation jetzt ihren Namen.",
+            color = MaterialTheme.colorScheme.secondary,
+        )
+        Spacer(Modifier.height(20.dp))
+        OutlinedTextField(
+            value = name,
+            onValueChange = { name = it.take(20) },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            label = { Text("Name") },
+        )
+        Spacer(Modifier.height(10.dp))
+        Text(
+            "Der Name bleibt für dieses Löm bestehen und kann später nicht geändert werden.",
+            color = MaterialTheme.colorScheme.secondary,
+        )
+        Spacer(Modifier.height(20.dp))
+        Button(
+            onClick = { onConfirm(name.trim()) },
+            enabled = name.isNotBlank(),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text("Namen bestätigen")
+        }
+    }
+}
+
+@Composable
+private fun FarewellScreen(
+    state: LoemGameState,
+    onStartNextGeneration: (GenerationInheritance) -> Unit,
+) {
+    var inheritance by remember(state.generation) {
+        mutableStateOf<GenerationInheritance?>(null)
+    }
+    Column(
+        modifier = Modifier.fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            "${state.name} hat sich verabschiedet",
+            style = MaterialTheme.typography.headlineMedium,
+            fontWeight = FontWeight.Bold,
+        )
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "Dein Löm ist fortgereist – aber es hat dir ein Ei dagelassen.",
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.secondary,
+        )
+        Spacer(Modifier.height(20.dp))
+        LoemEgg()
+        Spacer(Modifier.height(20.dp))
+        Card(
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceContainer,
+            ),
+        ) {
+            Text(
+                "Am frühen Morgen lag auf ${state.name}s Lieblingsplatz nur noch eine kleine, " +
+                    "glitzernde Spur. Daneben ruhte ein warmes Ei und ein Zettel: „Danke für " +
+                    "unsere gemeinsame Zeit. Kümmere dich gut um das Kleine – ein Teil von mir " +
+                    "darf es auf seiner Reise begleiten.“",
+                modifier = Modifier.padding(18.dp),
+            )
+        }
+        Spacer(Modifier.height(24.dp))
+        Text(
+            "Was soll Generation ${state.generation + 1} erben?",
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold,
+        )
+        Text(
+            "Du kannst eine Eigenschaft übernehmen – oder alles neu auslosen lassen.",
+            color = MaterialTheme.colorScheme.secondary,
+        )
+        Spacer(Modifier.height(12.dp))
+        Button(
+            onClick = { inheritance = GenerationInheritance.COLOR },
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text(
+                if (inheritance == GenerationInheritance.COLOR) {
+                    "✓ Farbe übernehmen: ${state.color.displayName}"
+                } else {
+                    "Farbe übernehmen: ${state.color.displayName}"
+                },
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        Button(
+            onClick = { inheritance = GenerationInheritance.GENDER },
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text(
+                if (inheritance == GenerationInheritance.GENDER) {
+                    "✓ Geschlecht übernehmen: ${state.gender.displayName}"
+                } else {
+                    "Geschlecht übernehmen: ${state.gender.displayName}"
+                },
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        Button(
+            onClick = { inheritance = GenerationInheritance.ELEMENT },
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text(
+                if (inheritance == GenerationInheritance.ELEMENT) {
+                    "✓ Element übernehmen: ${state.element.symbol} ${state.element.displayName}"
+                } else {
+                    "Element übernehmen: ${state.element.symbol} ${state.element.displayName}"
+                },
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        Button(
+            onClick = { inheritance = GenerationInheritance.NONE },
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text(
+                if (inheritance == GenerationInheritance.NONE) {
+                    "✓ Keine Eigenschaft übernehmen"
+                } else {
+                    "Keine Eigenschaft übernehmen"
+                },
+            )
+        }
+        Spacer(Modifier.height(20.dp))
+        Button(
+            onClick = { inheritance?.let(onStartNextGeneration) },
+            enabled = inheritance != null,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text("Das Ei annehmen")
+        }
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "Das neue Ei schlüpft nach etwa fünf Minuten.",
+            color = MaterialTheme.colorScheme.secondary,
+        )
+    }
 }
 
 @Composable
@@ -426,7 +805,6 @@ private fun HomeScreen(
     onRemoveSleepTeddy: () -> Unit,
     onFlushSound: () -> Unit,
     onFlush: () -> Unit,
-    onRename: (String) -> Unit,
 ) {
     val vitals = state.vitals(nowMillis)
     val localHour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
@@ -444,8 +822,6 @@ private fun HomeScreen(
         else -> Color(0xFFE9F3D5)
     }
     var isFlushing by remember { mutableStateOf(false) }
-    var showNameDialog by remember { mutableStateOf(false) }
-    var nameInput by remember(state.name) { mutableStateOf(state.name) }
 
     LaunchedEffect(isFlushing) {
         if (isFlushing) {
@@ -470,8 +846,7 @@ private fun HomeScreen(
                 Column(
                     modifier = Modifier
                         .weight(1f)
-                        .padding(horizontal = 8.dp)
-                        .clickable { showNameDialog = true },
+                        .padding(horizontal = 8.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
                     Text(
@@ -490,6 +865,7 @@ private fun HomeScreen(
                 LevelExperienceRing(
                     totalExperience = state.battleExperience,
                     levelCap = state.battleLevelCap,
+                    startLevel = state.battleStartLevel,
                     generation = state.generation,
                 )
             }
@@ -606,38 +982,8 @@ private fun HomeScreen(
         }
         if (state.isHatched(nowMillis)) {
             Spacer(Modifier.height(10.dp))
-            HomeHungerIndicator(
-                hunger = vitals.hunger,
-                modifier = Modifier.fillMaxWidth(),
-            )
+            HomeHungerIndicator(hunger = vitals.hunger, modifier = Modifier.fillMaxWidth())
         }
-    }
-
-    if (showNameDialog) {
-        AlertDialog(
-            onDismissRequest = { showNameDialog = false },
-            title = { Text("Löm benennen") },
-            text = {
-                OutlinedTextField(
-                    value = nameInput,
-                    onValueChange = { nameInput = it.take(20) },
-                    singleLine = true,
-                    label = { Text("Name") },
-                )
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        onRename(nameInput)
-                        showNameDialog = false
-                    },
-                    enabled = nameInput.isNotBlank(),
-                ) { Text("Speichern") }
-            },
-            dismissButton = {
-                TextButton(onClick = { showNameDialog = false }) { Text("Abbrechen") }
-            },
-        )
     }
 }
 
@@ -646,11 +992,7 @@ private fun HomeHungerIndicator(
     hunger: Float,
     modifier: Modifier = Modifier,
 ) {
-    val indicatorColor = when {
-        hunger >= 75f -> Color(0xFFC3423F)
-        hunger >= 45f -> Color(0xFFE39A36)
-        else -> MaterialTheme.colorScheme.primary
-    }
+    val indicatorColor = hungerIndicatorColor(hunger)
     Card(modifier = modifier) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 9.dp),
@@ -816,6 +1158,20 @@ private fun AnimatedPoop(isFlushing: Boolean) {
 
 @Composable
 private fun PropertiesScreen(state: LoemGameState, nowMillis: Long) {
+    var showGallery by rememberSaveable { mutableStateOf(false) }
+    var showDetails by rememberSaveable { mutableStateOf(false) }
+    BackHandler(enabled = showGallery) { showGallery = false }
+    if (showGallery) {
+        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            TextButton(onClick = { showGallery = false }) { Text("← Zurück zum Status") }
+            Text("Ahnengalerie", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            if (state.familyTree.isEmpty()) {
+                Text("Die Familienchronik beginnt mit dem nächsten Generationswechsel.")
+            }
+            state.familyTree.asReversed().forEach { AncestorCard(it) }
+        }
+        return
+    }
     val isHatched = state.isHatched(nowMillis)
     val vitals = state.vitals(nowMillis)
     val satisfaction = state.currentHappiness(nowMillis)
@@ -823,19 +1179,17 @@ private fun PropertiesScreen(state: LoemGameState, nowMillis: Long) {
     val weightProfile = state.weightProfile()
     val totalBattles = state.battleWins + state.battleLosses
     val winRate = if (totalBattles == 0) 0f else state.battleWins * 100f / totalBattles
-    val battleLevel = LoemBattle.levelProgress(state.battleExperience, state.battleLevelCap)
+    val battleLevel = LoemBattle.levelProgress(
+        state.battleExperience,
+        state.battleLevelCap,
+        state.battleStartLevel,
+    )
     Column(
         modifier = Modifier.fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(24.dp),
+            .padding(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Text(
-            "Status",
-            style = MaterialTheme.typography.headlineMedium,
-            fontWeight = FontWeight.Bold,
-        )
-        Spacer(Modifier.height(16.dp))
         if (!isHatched) {
             val remainingMillis = state.hatchRemainingMillis(nowMillis)
             val hatchProgress = (
@@ -877,94 +1231,176 @@ private fun PropertiesScreen(state: LoemGameState, nowMillis: Long) {
             Text("${state.gender.symbol} ${state.gender.displayName}", style = MaterialTheme.typography.titleMedium)
             Text("${state.element.symbol} ${state.element.displayName}", style = MaterialTheme.typography.titleMedium)
         }
-        Spacer(Modifier.height(20.dp))
-        StatusMetric(
-            label = "Hunger",
-            value = "${vitals.hunger.toInt()} %",
-            progress = vitals.hunger / 100f,
-            color = when {
-                vitals.hunger <= 60f -> Color(0xFF58A55C)
-                vitals.hunger <= 80f -> Color(0xFFE1A33A)
-                else -> Color(0xFFC94B45)
-            },
-        )
-        Spacer(Modifier.height(10.dp))
-        StatusMetric(
-            label = "Gewicht",
-            value = formatWeight(vitals.weightGrams),
-            progress = (vitals.weightGrams / weightProfile.maximumWeightGrams.toFloat()).coerceIn(0f, 1f),
-            color = when {
-                weightProfile.isHealthy(vitals.weightGrams) -> Color(0xFF58A55C)
-                vitals.weightGrams in
-                    (weightProfile.healthyWeightGrams * 60 / 100)..
-                    (weightProfile.healthyWeightGrams * 170 / 100) -> Color(0xFFE1A33A)
-                else -> Color(0xFFC94B45)
-            },
-        )
-        Spacer(Modifier.height(10.dp))
-        StatusMetric(
-            label = "Zufriedenheit",
-            value = "$satisfaction %",
-            progress = satisfaction / 100f,
-            color = when {
-                satisfaction >= 70 -> Color(0xFF58A55C)
-                satisfaction >= 40 -> Color(0xFFE1A33A)
-                else -> Color(0xFFC94B45)
-            },
-        )
-        Spacer(Modifier.height(10.dp))
-        StatusMetric(
-            label = "Gesundheit",
-            value = "$health %",
-            progress = health / 100f,
-            color = when {
-                health >= 70 -> Color(0xFF58A55C)
-                health >= 40 -> Color(0xFFE1A33A)
-                else -> Color(0xFFC94B45)
-            },
-        )
-        Spacer(Modifier.height(10.dp))
-        PropertyCard("Alter", formatAge(state.ageHours(nowMillis)))
-        Spacer(Modifier.height(10.dp))
-        PropertyCard(
-            "Entwicklung",
-            LoemEvolution.title(state.evolution, state.evolutionPath, state.gender),
-        )
-        Spacer(Modifier.height(10.dp))
-        PropertyCard("Generation", "Generation ${state.generation}")
-        Spacer(Modifier.height(10.dp))
-        PropertyCard("Kampf-Level", "Level ${battleLevel.level} / ${state.battleLevelCap}")
-        Spacer(Modifier.height(10.dp))
-        if (battleLevel.level == state.battleLevelCap) {
+        Spacer(Modifier.height(12.dp))
+        StatusSection("Wohlbefinden") {
             StatusMetric(
-                label = "Erfahrung",
-                value = "Maximallevel erreicht",
-                progress = 1f,
-                color = Color(0xFF7B61C9),
+                label = "Hunger",
+                value = "${vitals.hunger.toInt()} %",
+                progress = vitals.hunger / 100f,
+                color = hungerIndicatorColor(vitals.hunger),
             )
-        } else {
+            val weightDescription = when {
+                weightProfile.isHealthy(vitals.weightGrams) -> "Normal"
+                vitals.weightGrams < weightProfile.healthyWeightGrams -> "Zu leicht"
+                else -> "Zu schwer"
+            }
             StatusMetric(
-                label = "EP bis Level ${battleLevel.level + 1}",
-                value = "${battleLevel.experienceIntoLevel} / ${battleLevel.experienceForNextLevel} EP",
-                progress = battleLevel.experienceIntoLevel / battleLevel.experienceForNextLevel.toFloat(),
-                color = Color(0xFF7B61C9),
+                label = "Gewicht",
+                value = "${formatWeight(vitals.weightGrams)} · $weightDescription",
+                progress = vitals.weightGrams / weightProfile.maximumWeightGrams.toFloat(),
+                color = if (weightProfile.isHealthy(vitals.weightGrams)) Color(0xFF58A55C) else Color(0xFFE1A33A),
+                healthyRange = (0.8f / 3f)..(1.3f / 3f),
+            )
+            Text(
+                "Normalbereich: ${formatWeight(weightProfile.healthyWeightGrams * 80 / 100)}–" +
+                    formatWeight(weightProfile.healthyWeightGrams * 130 / 100),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            StatusMetric(
+                label = "Zufriedenheit",
+                value = "$satisfaction %",
+                progress = satisfaction / 100f,
+                color = when {
+                    satisfaction >= 70 -> Color(0xFF58A55C)
+                    satisfaction >= 40 -> Color(0xFFE1A33A)
+                    else -> Color(0xFFC94B45)
+                },
+            )
+            StatusMetric(
+                label = "Gesundheit",
+                value = "$health %",
+                progress = health / 100f,
+                color = when {
+                    health >= 70 -> Color(0xFF58A55C)
+                    health >= 40 -> Color(0xFFE1A33A)
+                    else -> Color(0xFFC94B45)
+                },
             )
         }
-        Spacer(Modifier.height(10.dp))
-        BattleRecordCard(winRate, state.battleWins, state.battleLosses)
-        Spacer(Modifier.height(10.dp))
-        if (BuildConfig.DEBUG) {
-            PropertyCard(
-                "Pflege-Score (Debug)",
-                String.format(
-                    java.util.Locale.GERMANY,
-                    "%.1f",
-                    state.careAverage(nowMillis, Calendar.getInstance().get(Calendar.HOUR_OF_DAY)),
-                ),
-            )
-            Spacer(Modifier.height(10.dp))
+        Spacer(Modifier.height(12.dp))
+        StatusSection("Steckbrief") {
+            PropertyCard("Alter", formatAge(state.ageHours(nowMillis)))
+            PropertyCard("Entwicklung", LoemEvolution.title(state.evolution, state.evolutionPath, state.gender))
+            PropertyCard("Generation", state.generation.toString())
         }
-        PropertyCard("Mahlzeiten / Training", "${state.meals} / ${state.trainingSessions}")
+        Spacer(Modifier.height(12.dp))
+        StatusSection("Kampf") {
+            PropertyCard("Level", "${battleLevel.level} / ${state.battleLevelCap}")
+            if (battleLevel.level == state.battleLevelCap) {
+                StatusMetric("Erfahrung", "Maximallevel erreicht", 1f, Color(0xFF7B61C9))
+            } else {
+                StatusMetric(
+                    label = "EP bis Level ${battleLevel.level + 1}",
+                    value = "${battleLevel.experienceIntoLevel} / ${battleLevel.experienceForNextLevel} EP",
+                    progress = battleLevel.experienceIntoLevel / battleLevel.experienceForNextLevel.toFloat(),
+                    color = Color(0xFF7B61C9),
+                )
+            }
+            BattleRecordCard(winRate, state.battleWins, state.battleLosses)
+        }
+        TextButton(onClick = { showDetails = !showDetails }, modifier = Modifier.fillMaxWidth()) {
+            Text(if (showDetails) "Weniger Details ▴" else "Weitere Details ▾")
+        }
+        if (showDetails) {
+            if (BuildConfig.DEBUG) {
+                PropertyCard(
+                    "Pflege-Score (Debug)",
+                    String.format(
+                        java.util.Locale.GERMANY,
+                        "%.1f",
+                        state.careAverage(nowMillis, Calendar.getInstance().get(Calendar.HOUR_OF_DAY)),
+                    ),
+                )
+            }
+            PropertyCard("Mahlzeiten / Training", "${state.meals} / ${state.trainingSessions}")
+        }
+        if (state.ancestorGalleryUnlocked) {
+            OutlinedButton(onClick = { showGallery = true }, modifier = Modifier.fillMaxWidth()) {
+                Text("Ahnengalerie · ${state.familyTree.size} frühere Löms →")
+            }
+        }
+    }
+}
+
+@Composable
+private fun AncestorCard(ancestor: LoemAncestor) {
+    val totalBattles = ancestor.battleWins + ancestor.battleLosses
+    val winRate = if (totalBattles == 0) {
+        0f
+    } else {
+        ancestor.battleWins * 100f / totalBattles
+    }
+    val portraitState = remember(ancestor) {
+        LoemGameState(
+            bornAtMillis = 0L,
+            name = ancestor.name,
+            color = ancestor.color,
+            gender = ancestor.gender,
+            element = ancestor.element,
+            evolution = ancestor.evolution,
+            evolutionPath = ancestor.evolutionPath,
+            generation = ancestor.generation,
+        )
+    }
+    val portraitPresentation = remember(portraitState) {
+        LoemSpriteStateMachine.presentation(
+            state = portraitState,
+            visualState = LoemVisualState.IDLE,
+            surface = SpriteSurface.HOME,
+        )
+    }
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    "G${ancestor.generation} · ${ancestor.name}",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                )
+                Spacer(Modifier.height(6.dp))
+                Text("${ancestor.gender.symbol} ${ancestor.gender.displayName} · ${ancestor.element.symbol} ${ancestor.element.displayName}")
+                Text("Kampf-Level: ${ancestor.battleLevel}")
+                Text("Kämpfe: ${ancestor.battleWins} gewonnen · ${ancestor.battleLosses} verloren")
+                Text(
+                    "Gewinnquote: ${String.format(java.util.Locale.GERMANY, "%.1f %%", winRate)}",
+                )
+                Spacer(Modifier.height(5.dp))
+                Text(
+                    "Geschlüpft: ${formatFamilyDate(ancestor.hatchedAtMillis)}",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Text(
+                    "Fortgereist: ${formatFamilyDate(ancestor.departedAtMillis)}",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Text(
+                    "Alter: ${if (ancestor.ageHoursAtDeparture > 0L) formatAge(ancestor.ageHoursAtDeparture) else "Nicht aufgezeichnet"}",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            Card(
+                modifier = Modifier.size(108.dp),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            ) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    LoemSprite(
+                        presentation = portraitPresentation,
+                        color = ancestor.color,
+                        sizeDpOverride = 96,
+                        animate = false,
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -975,7 +1411,7 @@ private fun BattleRecordCard(winRate: Float, wins: Int, losses: Int) {
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
     ) {
-        Column(Modifier.fillMaxWidth().padding(18.dp)) {
+        Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -995,38 +1431,57 @@ private fun BattleRecordCard(winRate: Float, wins: Int, losses: Int) {
 }
 
 @Composable
+private fun StatusSection(title: String, content: @Composable ColumnScope.() -> Unit) {
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
+        Column(Modifier.fillMaxWidth().padding(12.dp)) {
+            Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            content()
+        }
+    }
+}
+
+@Composable
 private fun StatusMetric(
     label: String,
     value: String,
     progress: Float,
     color: Color,
+    healthyRange: ClosedFloatingPointRange<Float>? = null,
 ) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
-    ) {
-        Column(Modifier.fillMaxWidth().padding(16.dp)) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(label, fontWeight = FontWeight.SemiBold)
-                Text(value, fontWeight = FontWeight.Bold)
-            }
-            Spacer(Modifier.height(8.dp))
+    Column(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(label, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+            Text(value, modifier = Modifier.weight(1f), fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodyMedium)
+        }
+        Spacer(Modifier.height(6.dp))
+        if (healthyRange == null) {
             LinearProgressIndicator(
                 progress = { progress.coerceIn(0f, 1f) },
-                modifier = Modifier.fillMaxWidth().height(10.dp),
+                modifier = Modifier.fillMaxWidth().height(6.dp),
                 color = color,
                 trackColor = MaterialTheme.colorScheme.surface,
             )
+        } else {
+            val track = MaterialTheme.colorScheme.surface
+            val marker = MaterialTheme.colorScheme.onSurface
+            Canvas(Modifier.fillMaxWidth().height(12.dp)) {
+                drawRect(track, topLeft = Offset(0f, size.height / 4), size = Size(size.width, size.height / 2))
+                drawRect(
+                    Color(0xFF58A55C),
+                    topLeft = Offset(size.width * healthyRange.start, size.height / 4),
+                    size = Size(size.width * (healthyRange.endInclusive - healthyRange.start), size.height / 2),
+                )
+                val x = (size.width * progress.coerceIn(0f, 1f)).coerceIn(2.dp.toPx(), size.width - 2.dp.toPx())
+                drawLine(marker, Offset(x, 0f), Offset(x, size.height), strokeWidth = 3.dp.toPx())
+            }
         }
     }
 }
 
 private enum class BattleAnimationPhase {
     ATTACK,
-    PAUSE,
+    INCOMING,
     HIT,
-    BRACE,
-    VICTORY,
     RESULT_HOLD,
 }
 
@@ -1035,6 +1490,7 @@ private fun BattleSequence(
     state: LoemGameState,
     result: LoemBattleResult,
     startedAtMillis: Long? = null,
+    soundsEnabled: Boolean,
     onComplete: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -1068,38 +1524,34 @@ private fun BattleSequence(
     val isFinalRound = round == 3
     val phase = when {
         isResultHold -> BattleAnimationPhase.RESULT_HOLD
-        !isFinalRound && withinRound < 2_000 -> BattleAnimationPhase.ATTACK
-        !isFinalRound && withinRound < 3_000 -> BattleAnimationPhase.PAUSE
-        !isFinalRound -> BattleAnimationPhase.HIT
-        result.won && withinRound < 2_000 -> BattleAnimationPhase.ATTACK
-        result.won && withinRound < 3_000 -> BattleAnimationPhase.PAUSE
-        result.won -> BattleAnimationPhase.VICTORY
-        withinRound < 3_000 -> BattleAnimationPhase.BRACE
+        withinRound < BATTLE_ATTACK_PHASE_MILLIS -> BattleAnimationPhase.ATTACK
+        withinRound < BATTLE_IMPACT_AT_MILLIS -> BattleAnimationPhase.INCOMING
         else -> BattleAnimationPhase.HIT
     }
     val phaseProgress = when (phase) {
-        BattleAnimationPhase.ATTACK -> (withinRound / 2_000f).coerceIn(0f, 1f)
-        BattleAnimationPhase.PAUSE -> ((withinRound - 2_000) / 1_000f).coerceIn(0f, 1f)
-        BattleAnimationPhase.HIT -> ((withinRound - 3_000) / 2_000f).coerceIn(0f, 1f)
-        BattleAnimationPhase.BRACE -> (withinRound / 3_000f).coerceIn(0f, 1f)
-        BattleAnimationPhase.VICTORY -> ((withinRound - 3_000) / 2_000f).coerceIn(0f, 1f)
+        BattleAnimationPhase.ATTACK ->
+            (withinRound / BATTLE_PROJECTILE_FLIGHT_MILLIS.toFloat()).coerceIn(0f, 1f)
+        BattleAnimationPhase.INCOMING ->
+            ((withinRound - BATTLE_ATTACK_PHASE_MILLIS) /
+                BATTLE_PROJECTILE_FLIGHT_MILLIS.toFloat()).coerceIn(0f, 1f)
+        BattleAnimationPhase.HIT ->
+            ((withinRound - BATTLE_IMPACT_AT_MILLIS) /
+                BATTLE_HIT_ANIMATION_MILLIS.toFloat()).coerceIn(0f, 1f)
         BattleAnimationPhase.RESULT_HOLD -> 1f
     }
     LaunchedEffect(round, phase) {
+        if (!soundsEnabled) return@LaunchedEffect
         when (phase) {
             BattleAnimationPhase.ATTACK -> battleSounds.play(
                 element = state.element,
                 hit = false,
                 double = isFinalRound && result.won,
             )
-            BattleAnimationPhase.HIT -> {
-                delay(BATTLE_HIT_SOUND_DELAY_MILLIS)
-                battleSounds.play(
-                    element = result.opponentElement,
-                    hit = true,
-                    double = isFinalRound && !result.won,
-                )
-            }
+            BattleAnimationPhase.HIT -> battleSounds.play(
+                element = result.opponentElement,
+                hit = true,
+                double = isFinalRound && !result.won,
+            )
             BattleAnimationPhase.RESULT_HOLD -> battleSounds.playOutcome(result.won)
             else -> Unit
         }
@@ -1110,12 +1562,8 @@ private fun BattleSequence(
         0f
     }
     val hitMotion = if (phase == BattleAnimationPhase.HIT) {
-        (sin(phaseProgress * PI * 12) * (1f - phaseProgress)).toFloat()
-    } else {
-        0f
-    }
-    val victoryMotion = if (phase == BattleAnimationPhase.VICTORY) {
-        abs(sin(phaseProgress * PI * 2)).toFloat()
+        // One impact gets one recoil. A single-hit animation must not read as a double hit.
+        (sin(phaseProgress * PI) * (1f - phaseProgress)).toFloat()
     } else {
         0f
     }
@@ -1124,18 +1572,16 @@ private fun BattleSequence(
             if (isFinalRound && result.won) LoemVisualState.DOUBLE_ATTACK else LoemVisualState.ATTACK
         BattleAnimationPhase.HIT ->
             if (isFinalRound && !result.won) LoemVisualState.DOUBLE_HIT else LoemVisualState.HIT
-        BattleAnimationPhase.VICTORY -> LoemVisualState.VICTORY
         BattleAnimationPhase.RESULT_HOLD ->
-            if (result.won) LoemVisualState.VICTORY else LoemVisualState.DOUBLE_HIT
-        BattleAnimationPhase.PAUSE,
-        BattleAnimationPhase.BRACE,
+            if (result.won) LoemVisualState.VICTORY else LoemVisualState.DEFEAT
+        BattleAnimationPhase.INCOMING,
         -> LoemVisualState.IDLE
     }
     val spritePresentation = LoemSpriteStateMachine.presentation(
         state = state,
         visualState = visualState,
         surface = SpriteSurface.BATTLE,
-        holdLastFrame = phase == BattleAnimationPhase.RESULT_HOLD,
+        playOnceAndHold = phase == BattleAnimationPhase.RESULT_HOLD,
     )
     Column(
         modifier = Modifier.fillMaxSize().padding(20.dp),
@@ -1151,12 +1597,23 @@ private fun BattleSequence(
             Text(
                 when (phase) {
                     BattleAnimationPhase.ATTACK ->
-                        if (isFinalRound) "Doppelangriff!" else "${state.element.displayName}-Angriff"
-                    BattleAnimationPhase.PAUSE -> "Geschosse unterwegs …"
+                        when {
+                            !isFinalRound -> "${state.element.displayName}-Angriff"
+                            result.won -> "Doppelangriff!"
+                            else -> "Letzter Angriff!"
+                        }
+                    BattleAnimationPhase.INCOMING ->
+                        if (isFinalRound && result.won) {
+                            "Letztes Gegengeschoss unterwegs …"
+                        } else {
+                            "Gegengeschosse unterwegs …"
+                        }
                     BattleAnimationPhase.HIT ->
-                        if (isFinalRound) "Doppeltreffer!" else "${result.opponentElement.displayName}-Treffer"
-                    BattleAnimationPhase.BRACE -> "Der entscheidende Angriff kommt …"
-                    BattleAnimationPhase.VICTORY -> "Entschieden!"
+                        if (isFinalRound && !result.won) {
+                            "Doppeltreffer!"
+                        } else {
+                            "${result.opponentElement.displayName}-Treffer"
+                        }
                     BattleAnimationPhase.RESULT_HOLD -> if (result.won) "Sieg!" else "Niederlage"
                 },
             )
@@ -1169,10 +1626,10 @@ private fun BattleSequence(
             Box(
                 modifier = Modifier.graphicsLayer {
                     translationX = attackMotion * 28f + hitMotion * 14f
-                    translationY = -victoryMotion * 14f
+                    translationY = 0f
                     rotationZ = hitMotion * 4f
                     scaleX = 1f + attackMotion * 0.04f - hitMotion.absoluteValue * 0.03f
-                    scaleY = 1f - attackMotion * 0.025f + victoryMotion * 0.025f
+                    scaleY = 1f - attackMotion * 0.025f
                 },
             ) {
                 LoemSprite(
@@ -1187,13 +1644,20 @@ private fun BattleSequence(
                     element = state.element,
                     progress = phaseProgress,
                     incoming = false,
-                    projectileCount = if (isFinalRound) 2 else 1,
+                    projectileCount = outgoingProjectileCount(isFinalRound, result.won),
                 )
-                BattleAnimationPhase.HIT -> BattleProjectileEffect(
+                BattleAnimationPhase.INCOMING -> BattleProjectileEffect(
                     element = result.opponentElement,
                     progress = phaseProgress,
                     incoming = true,
-                    projectileCount = if (isFinalRound) 2 else 1,
+                    projectileCount = incomingProjectileCount(isFinalRound, result.won),
+                )
+                BattleAnimationPhase.HIT -> BattleProjectileEffect(
+                    element = result.opponentElement,
+                    progress = 1f,
+                    impactProgress = phaseProgress,
+                    incoming = true,
+                    projectileCount = incomingProjectileCount(isFinalRound, result.won),
                 )
                 else -> Unit
             }
@@ -1219,6 +1683,7 @@ private fun BattleSequence(
 private fun BattleProjectileEffect(
     element: LoemElement,
     progress: Float,
+    impactProgress: Float = 0f,
     incoming: Boolean,
     projectileCount: Int,
 ) {
@@ -1235,11 +1700,11 @@ private fun BattleProjectileEffect(
         ).asImageBitmap()
     }
     Canvas(modifier = Modifier.fillMaxWidth().height(190.dp)) {
-        val travelProgress = (progress / 0.72f).coerceIn(0f, 1f)
+        val travelProgress = progress.coerceIn(0f, 1f)
         val startX = if (incoming) size.width * 1.08f else size.width * 0.58f
         val endX = if (incoming) size.width * 0.53f else size.width * 1.08f
         val baseX = startX + (endX - startX) * travelProgress
-        val burstProgress = ((progress - 0.68f) / 0.32f).coerceIn(0f, 1f)
+        val burstProgress = impactProgress.coerceIn(0f, 1f)
         val projectileWidth = 128.dp.toPx()
         val projectileHeight = 80.dp.toPx()
         val doubleShotSeparation = 38.dp.toPx()
@@ -1248,7 +1713,7 @@ private fun BattleProjectileEffect(
                 if (projectileCount == 2) index * doubleShotSeparation - doubleShotSeparation / 2f else 0f
             val x = baseX + if (incoming) separation else -separation
             val y = size.height * 0.46f + separation
-            if (burstProgress < 0.2f || !incoming) {
+            if (travelProgress < 1f) {
                 val destinationOffset = IntOffset(
                     x = (x - projectileWidth / 2f).toInt(),
                     y = (y - projectileHeight / 2f).toInt(),
@@ -1405,12 +1870,25 @@ private class BattleSoundPlayer(context: android.content.Context) {
 
 private val Float.absoluteValue: Float get() = abs(this)
 
-private const val BATTLE_ROUND_MILLIS = 5_000L
+// Previously 1,440 ms (72 % of a 2 s phase); 720 ms is exactly twice as fast.
+internal const val BATTLE_PROJECTILE_FLIGHT_MILLIS = 720L
+internal const val BATTLE_PROJECTILE_OFFSCREEN_MILLIS = 500L
+internal const val BATTLE_ATTACK_PHASE_MILLIS =
+    BATTLE_PROJECTILE_FLIGHT_MILLIS + BATTLE_PROJECTILE_OFFSCREEN_MILLIS
+internal const val BATTLE_IMPACT_AT_MILLIS =
+    BATTLE_ATTACK_PHASE_MILLIS + BATTLE_PROJECTILE_FLIGHT_MILLIS
+internal const val BATTLE_HIT_ANIMATION_MILLIS = 2_000L
+private const val BATTLE_ROUND_MILLIS = BATTLE_IMPACT_AT_MILLIS + BATTLE_HIT_ANIMATION_MILLIS
 private const val BATTLE_DURATION_MILLIS = 4 * BATTLE_ROUND_MILLIS
 private const val BATTLE_RESULT_HOLD_MILLIS = 3_000L
 private const val BATTLE_SEQUENCE_DURATION_MILLIS =
     BATTLE_DURATION_MILLIS + BATTLE_RESULT_HOLD_MILLIS
-private const val BATTLE_HIT_SOUND_DELAY_MILLIS = 1_360L
+
+internal fun outgoingProjectileCount(isFinalRound: Boolean, playerWon: Boolean): Int =
+    if (isFinalRound && playerWon) 2 else 1
+
+internal fun incomingProjectileCount(isFinalRound: Boolean, playerWon: Boolean): Int =
+    if (isFinalRound && !playerWon) 2 else 1
 
 @Composable
 private fun BattleScreen(
@@ -1420,11 +1898,34 @@ private fun BattleScreen(
     battleResult: PendingLoemBattle?,
     onToggleVisibility: () -> Unit,
     onChallenge: (String) -> Unit,
+    onCancelChallenge: () -> Unit,
     onRespondToChallenge: (Boolean) -> Unit,
     onClearError: () -> Unit,
     onDismissResult: (String) -> Unit,
     onBattleAnimationActiveChange: (Boolean) -> Unit,
+    onOpenCare: () -> Unit,
 ) {
+    var showBattleDetails by rememberSaveable { mutableStateOf(false) }
+    var showDebugDetails by rememberSaveable { mutableStateOf(false) }
+    if (!state.isHatched(nowMillis)) {
+        Column(
+            modifier = Modifier.fillMaxSize().padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+        ) {
+            Text(
+                "Kampfmodus",
+                style = MaterialTheme.typography.headlineMedium,
+                fontWeight = FontWeight.Bold,
+            )
+            Spacer(Modifier.height(20.dp))
+            LoemEgg()
+            Spacer(Modifier.height(20.dp))
+            Text("Kämpfe und Kampfwerte sind erst nach dem Schlüpfen sichtbar.")
+        }
+        return
+    }
+
     val stats = LoemBattle.stats(
         state,
         nowMillis,
@@ -1449,35 +1950,105 @@ private fun BattleScreen(
             BattleSequence(
                 state = state,
                 result = activeResult,
+                soundsEnabled = state.gameSoundsEnabled,
                 onComplete = { animatedResultId = activeResultId },
             )
             return
+    }
+    battleState.outgoingChallenge?.let { challenge ->
+        var countdownNowMillis by remember(challenge.id) {
+            mutableLongStateOf(System.currentTimeMillis())
+        }
+        LaunchedEffect(challenge.id, challenge.accepted) {
+            while (!challenge.accepted && countdownNowMillis < challenge.expiresAtMillis) {
+                countdownNowMillis = System.currentTimeMillis()
+                delay(100)
+            }
+        }
+        val remainingMillis = (challenge.expiresAtMillis - countdownNowMillis).coerceAtLeast(0L)
+        val remainingSeconds = ceil(remainingMillis / 1_000.0).toInt()
+        val timerProgress = (remainingMillis / 20_000f).coerceIn(0f, 1f)
+        Column(
+            modifier = Modifier.fillMaxSize().padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+        ) {
+            Text(
+                if (challenge.accepted) "Herausforderung angenommen" else "Herausforderung läuft",
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold,
+            )
+            Spacer(Modifier.height(10.dp))
+            Text(
+                if (challenge.accepted) {
+                    "Der Kampf gegen ${challenge.opponentName} wird gestartet …"
+                } else {
+                    "Warte auf ${challenge.opponentName}."
+                },
+                color = MaterialTheme.colorScheme.secondary,
+            )
+            Spacer(Modifier.height(28.dp))
+            Box(contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(
+                    progress = { if (challenge.accepted) 1f else timerProgress },
+                    modifier = Modifier.size(132.dp),
+                    strokeWidth = 9.dp,
+                )
+                Text(
+                    if (challenge.accepted) "✓" else "$remainingSeconds s",
+                    style = MaterialTheme.typography.headlineMedium,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+            if (!challenge.accepted) {
+                Spacer(Modifier.height(30.dp))
+                Button(
+                    onClick = onCancelChallenge,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Herausforderung abbrechen")
+                }
+            }
+        }
+        return
     }
     Column(
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())
             .padding(horizontal = 20.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text("Kampfmodus", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+        BattleLobby(
+            battleState = battleState,
+            battleCapable = battleCapable,
+            evolvedForBattle = evolvedForBattle,
+            onToggleVisibility = onToggleVisibility,
+            onChallenge = onChallenge,
+            onOpenCare = onOpenCare,
+        )
         Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
-            Column(Modifier.fillMaxWidth().padding(16.dp)) {
-                Text(state.name, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                Text("${state.element.symbol} ${state.element.displayName}")
-                Spacer(Modifier.height(8.dp))
-                Text("Stärke: ${stats.strength}")
-                Text("Verteidigung: ${stats.defense}")
-                Text("Kampfstufe: ${stats.rating}")
+            Column(Modifier.fillMaxWidth().padding(12.dp)) {
+                Text("${state.name} · ${state.element.symbol} ${state.element.displayName}", fontWeight = FontWeight.Bold)
+                PropertyCard("Kampfkraft", "${stats.rating}")
+                PropertyCard("Verteidigung", "${stats.defense}")
+                TextButton(onClick = { showBattleDetails = !showBattleDetails }) {
+                    Text(if (showBattleDetails) "Details ausblenden ▴" else "Kampfdetails ▾")
+                }
+                if (showBattleDetails) {
                 Text("Bilanz: ${state.battleWins} Siege / ${state.battleLosses} Niederlagen")
                 Text(
                     "Pflegebonus: ${((stats.careModifier - 1f) * 100).toInt()} %  ·  " +
                         "Training: +${stats.trainingBonus}",
                     style = MaterialTheme.typography.bodySmall,
                 )
+                }
             }
         }
 
         if (BuildConfig.DEBUG) {
-            Card(
+            TextButton(onClick = { showDebugDetails = !showDebugDetails }) {
+                Text(if (showDebugDetails) "Debug-Werkzeuge ausblenden ▴" else "Debug-Werkzeuge ▾")
+            }
+            if (showDebugDetails) Card(
                 colors = CardDefaults.cardColors(
                     containerColor = MaterialTheme.colorScheme.secondaryContainer,
                 ),
@@ -1502,7 +2073,7 @@ private fun BattleScreen(
                             "+${stats.trainingBonus} Stärke",
                     )
                     Text(
-                        "Level ${LoemBattle.levelProgress(state.battleExperience, state.battleLevelCap).level}: " +
+                        "Level ${LoemBattle.levelProgress(state.battleExperience, state.battleLevelCap, state.battleStartLevel).level}: " +
                             "+${stats.levelStrengthBonus} Stärke, +${stats.levelDefenseBonus} Verteidigung",
                     )
                     HorizontalDivider()
@@ -1526,6 +2097,7 @@ private fun BattleScreen(
                     val debugLevel = LoemBattle.levelProgress(
                         state.battleExperience,
                         state.battleLevelCap,
+                        state.battleStartLevel,
                     )
                     Text(
                         if (debugLevel.level == state.battleLevelCap) {
@@ -1582,59 +2154,6 @@ private fun BattleScreen(
             }
         }
 
-        Text("Modus", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-        Button(onClick = {}, enabled = false, modifier = Modifier.fillMaxWidth()) {
-            Text("Online – kommt später")
-        }
-        Button(
-            onClick = onToggleVisibility,
-            enabled = battleCapable,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text(if (battleState.visible) "Lokalen Kampfmodus beenden" else "Im WLAN sichtbar werden")
-        }
-
-        if (!evolvedForBattle) {
-            Text(
-                "Dein Löm wird erst mit seiner ersten Evolution kampffähig.",
-                color = MaterialTheme.colorScheme.secondary,
-            )
-        } else if (!healthyEnoughForBattle) {
-            Text(
-                "Dein Löm braucht mindestens ${LoemBattle.MIN_BATTLE_HEALTH} % Gesundheit, " +
-                    "um im WLAN-Kampfmodus sichtbar zu werden.",
-                color = MaterialTheme.colorScheme.secondary,
-            )
-        }
-
-        if (battleState.visible) {
-            Text(
-                "Du bist im lokalen WLAN sichtbar. Dieser Bildschirm muss geöffnet bleiben.",
-                style = MaterialTheme.typography.bodySmall,
-            )
-            Text("Gefundene Löms", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-            if (battleState.opponents.isEmpty()) {
-                Text("Noch keine Gegner im gleichen WLAN gefunden.")
-            } else {
-                battleState.opponents.forEach { opponent ->
-                    Card(
-                        modifier = Modifier.fillMaxWidth().clickable(
-                            enabled = battleCapable && !battleState.busy,
-                            onClick = { onChallenge(opponent.id) },
-                        ),
-                    ) {
-                        Row(
-                            Modifier.fillMaxWidth().padding(16.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text(opponent.displayName, fontWeight = FontWeight.Bold)
-                            Text(if (battleState.busy) "Warte …" else "Herausfordern")
-                        }
-                    }
-                }
-            }
-        }
     }
 
     battleState.pendingChallenge?.let { challenge ->
@@ -1680,6 +2199,7 @@ private fun BattleScreen(
                             previousExperience = event.previousBattleExperience,
                             earnedExperience = event.earnedBattleExperience,
                             levelCap = state.battleLevelCap,
+                            startLevel = state.battleStartLevel,
                         )
                     }
                 }
@@ -1713,6 +2233,52 @@ private fun BattleScreen(
     }
 }
 
+@Composable
+private fun BattleLobby(
+    battleState: LocalBattleUiState,
+    battleCapable: Boolean,
+    evolvedForBattle: Boolean,
+    onToggleVisibility: () -> Unit,
+    onChallenge: (String) -> Unit,
+    onOpenCare: () -> Unit,
+) {
+    Button(
+        onClick = onToggleVisibility,
+        enabled = battleCapable || battleState.visible,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Text(if (battleState.visible) "WLAN-Suche beenden" else "Gegner im WLAN suchen")
+    }
+    if (!evolvedForBattle) {
+        Text("Kämpfe werden mit der ersten Evolution freigeschaltet.", style = MaterialTheme.typography.bodyMedium)
+    } else if (!battleCapable) {
+        Text("Dein Löm braucht mindestens ${LoemBattle.MIN_BATTLE_HEALTH} % Gesundheit.", style = MaterialTheme.typography.bodyMedium)
+        TextButton(onClick = onOpenCare) { Text("Zur Pflege →") }
+    }
+    if (battleState.visible) {
+        Text("Du bist im WLAN sichtbar. Lass die Kampfansicht geöffnet.", style = MaterialTheme.typography.bodySmall)
+        Text("Gefundene Löms", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+        if (battleState.opponents.isEmpty()) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                Text("Suche läuft … Beide Geräte müssen im selben WLAN suchen.", style = MaterialTheme.typography.bodyMedium)
+            }
+        }
+        battleState.opponents.forEach { opponent ->
+            Card(Modifier.fillMaxWidth()) {
+                Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(opponent.displayName, Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
+                    TextButton(onClick = { onChallenge(opponent.id) }, enabled = battleCapable && !battleState.busy) {
+                        Text(if (battleState.busy) "Warte …" else "Herausfordern")
+                    }
+                }
+            }
+        }
+    } else {
+        Text("Lokale Kämpfe im selben WLAN · Online folgt später", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
 private fun debugOpponentElement(element: LoemElement): LoemElement = when (element) {
     LoemElement.FIRE -> LoemElement.WATER
     LoemElement.WATER -> LoemElement.EARTH
@@ -1722,19 +2288,14 @@ private fun debugOpponentElement(element: LoemElement): LoemElement = when (elem
 
 @Composable
 private fun PropertyCard(label: String, value: String) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
-    ) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(18.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.Top,
         ) {
-            Text(label)
-            Text(value, fontWeight = FontWeight.Bold)
+            Text(label, modifier = Modifier.weight(0.4f), color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
+            Text(value, modifier = Modifier.weight(0.6f), fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodyMedium)
         }
-    }
 }
 
 @Composable
@@ -1781,12 +2342,12 @@ private val IDLE_FRAMES = listOf(
 )
 
 private val FEEDING_FRAMES = listOf(
-    SpriteFrame(2, 2, 508, 508),
-    SpriteFrame(514, 2, 508, 508),
-    SpriteFrame(1026, 2, 508, 508),
-    SpriteFrame(2, 514, 508, 508),
-    SpriteFrame(514, 514, 508, 508),
-    SpriteFrame(1026, 514, 508, 508),
+    SpriteFrame(80, 120, 400, 360),
+    SpriteFrame(592, 120, 400, 360),
+    SpriteFrame(1104, 120, 400, 360),
+    SpriteFrame(80, 632, 400, 360),
+    SpriteFrame(592, 632, 400, 360),
+    SpriteFrame(1104, 632, 400, 360),
 )
 
 private val GOOD_EVOLUTION_FRAMES = listOf(
@@ -2012,6 +2573,9 @@ private val POOP_STATE_FRAMES = listOf(
 )
 private val POOP_BATTLE_FRAMES = POOP_STATE_FRAMES
 private val GLOOM_WIZARD_STATE_FRAMES = POOP_STATE_FRAMES
+private val BAD_BATTLE_FRAMES = List(6) { index ->
+    SpriteFrame(48 + index % 3 * 512, 128 + index / 3 * 512, 416, 336)
+}
 private val MUD_TOAD_STATE_FRAMES = listOf(
     SpriteFrame(48, 144, 416, 320),
     SpriteFrame(560, 144, 416, 320),
@@ -2040,6 +2604,7 @@ private enum class LoemVisualState {
     DOUBLE_ATTACK,
     DOUBLE_HIT,
     VICTORY,
+    DEFEAT,
 }
 
 private enum class SpriteSurface {
@@ -2064,6 +2629,7 @@ private data class LoemSpriteSet(
     val doubleAttack: SpriteAsset = attack,
     val doubleHit: SpriteAsset = hit,
     val victory: SpriteAsset = idle,
+    val defeat: SpriteAsset = doubleHit,
     val homeFrameDurationMillis: Long = 180L,
     val feedingFrameDurationMillis: Long = 180L,
     val battleFrameDurationMillis: Long = 180L,
@@ -2081,6 +2647,7 @@ private data class LoemSpriteSet(
         LoemVisualState.DOUBLE_ATTACK -> doubleAttack
         LoemVisualState.DOUBLE_HIT -> doubleHit
         LoemVisualState.VICTORY -> victory
+        LoemVisualState.DEFEAT -> defeat
     }
 }
 
@@ -2103,7 +2670,7 @@ private object LoemSpriteStateMachine {
         state: LoemGameState,
         visualState: LoemVisualState,
         surface: SpriteSurface,
-        holdLastFrame: Boolean = false,
+        playOnceAndHold: Boolean = false,
     ): LoemSpritePresentation {
         val set = spriteSetFor(state)
         val selectedAsset = set.assetFor(visualState)
@@ -2112,7 +2679,7 @@ private object LoemSpriteStateMachine {
             SpriteSurface.FEEDING -> set.feedingFrameDurationMillis
             SpriteSurface.BATTLE -> set.battleFrameDurationMillis
         }
-        val shouldLoop = surface != SpriteSurface.FEEDING && !holdLastFrame
+        val shouldLoop = surface != SpriteSurface.FEEDING && !playOnceAndHold
         val baseClip = SpriteClip(
             spriteResource = selectedAsset.resource,
             frames = selectedAsset.frames,
@@ -2124,10 +2691,9 @@ private object LoemSpriteStateMachine {
                     state.evolution == 1 &&
                     state.evolutionPath == EvolutionPath.BAD,
         )
-        val clip = if (holdLastFrame) baseClip.holdingLastFrame() else baseClip
         return LoemSpritePresentation(
             evolution = if (surface == SpriteSurface.BATTLE) 1 else state.evolution,
-            clip = clip,
+            clip = baseClip,
             sizeDp = when (surface) {
                 SpriteSurface.HOME -> if (set.largeHomeSprite) 250 else 220
                 SpriteSurface.FEEDING -> 270
@@ -2192,11 +2758,12 @@ private object LoemSpriteStateMachine {
         sleep = asset(R.drawable.loem_bad_sleep_sheet, BAD_SLEEP_FRAMES),
         melon = asset(R.drawable.loem_bad_melon_sheet, BAD_MELON_FRAMES),
         ham = asset(R.drawable.loem_bad_ham_sheet, BAD_HAM_FRAMES),
-        attack = staticAsset(R.drawable.loem_bad_evolution_sheet, BAD_EVOLUTION_FRAMES.first()),
-        hit = staticAsset(R.drawable.loem_bad_evolution_sheet, BAD_EVOLUTION_FRAMES.first()),
-        doubleAttack = staticAsset(R.drawable.loem_bad_evolution_sheet, BAD_EVOLUTION_FRAMES.first()),
-        doubleHit = staticAsset(R.drawable.loem_bad_evolution_sheet, BAD_EVOLUTION_FRAMES.first()),
-        victory = staticAsset(R.drawable.loem_bad_evolution_sheet, BAD_EVOLUTION_FRAMES.first()),
+        attack = asset(R.drawable.loem_bad_battle_attack_sheet, BAD_BATTLE_FRAMES),
+        hit = asset(R.drawable.loem_bad_battle_hit_sheet, BAD_BATTLE_FRAMES),
+        doubleAttack = asset(R.drawable.loem_bad_battle_double_attack_sheet, BAD_BATTLE_FRAMES),
+        doubleHit = asset(R.drawable.loem_bad_battle_double_hit_sheet, BAD_BATTLE_FRAMES),
+        victory = asset(R.drawable.loem_bad_battle_victory_sheet, BAD_BATTLE_FRAMES),
+        defeat = asset(R.drawable.loem_bad_battle_defeat_sheet, BAD_BATTLE_FRAMES),
     )
     private val MAJESTIC_WING = LoemSpriteSet(
         idle = asset(R.drawable.loem_wing_evolution_idle_sheet, MAJESTIC_WING_EVOLUTION_FRAMES),
@@ -2209,7 +2776,6 @@ private object LoemSpriteStateMachine {
         doubleAttack = asset(R.drawable.loem_wing_evolution_battle_double_attack_sheet, MAJESTIC_WING_BATTLE_FRAMES),
         doubleHit = asset(R.drawable.loem_wing_evolution_battle_double_hit_sheet, MAJESTIC_WING_BATTLE_FRAMES),
         victory = asset(R.drawable.loem_wing_evolution_battle_victory_sheet, MAJESTIC_WING_BATTLE_FRAMES),
-        feedingFrameDurationMillis = 140L,
         battleFrameDurationMillis = 330L,
         battleSizeDp = 275,
     )
@@ -2246,11 +2812,12 @@ private object LoemSpriteStateMachine {
         sleep = asset(R.drawable.loem_mud_toad_sleep_sheet, MUD_TOAD_STATE_FRAMES),
         melon = asset(R.drawable.loem_mud_toad_melon_sheet, MUD_TOAD_STATE_FRAMES),
         ham = asset(R.drawable.loem_mud_toad_ham_sheet, MUD_TOAD_STATE_FRAMES),
-        attack = asset(R.drawable.loem_mud_toad_idle_sheet, MUD_TOAD_STATE_FRAMES),
-        hit = asset(R.drawable.loem_mud_toad_idle_sheet, MUD_TOAD_STATE_FRAMES),
-        doubleAttack = asset(R.drawable.loem_mud_toad_idle_sheet, MUD_TOAD_STATE_FRAMES),
-        doubleHit = asset(R.drawable.loem_mud_toad_idle_sheet, MUD_TOAD_STATE_FRAMES),
-        victory = asset(R.drawable.loem_mud_toad_idle_sheet, MUD_TOAD_STATE_FRAMES),
+        attack = asset(R.drawable.loem_mud_toad_battle_attack_sheet, MUD_TOAD_STATE_FRAMES),
+        hit = asset(R.drawable.loem_mud_toad_battle_hit_sheet, MUD_TOAD_STATE_FRAMES),
+        doubleAttack = asset(R.drawable.loem_mud_toad_battle_double_attack_sheet, MUD_TOAD_STATE_FRAMES),
+        doubleHit = asset(R.drawable.loem_mud_toad_battle_defeat_sheet, MUD_TOAD_STATE_FRAMES),
+        victory = asset(R.drawable.loem_mud_toad_battle_victory_sheet, MUD_TOAD_STATE_FRAMES),
+        defeat = asset(R.drawable.loem_mud_toad_battle_defeat_sheet, MUD_TOAD_STATE_FRAMES),
         homeFrameDurationMillis = 260L,
     )
 
@@ -2317,19 +2884,35 @@ private object LoemSpriteStateMachine {
         R.drawable.loem_stormkaiser_battle_hit_sheet, R.drawable.loem_stormkaiser_battle_double_attack_sheet,
         R.drawable.loem_stormkaiser_battle_double_hit_sheet, R.drawable.loem_stormkaiser_battle_victory_sheet,
         STORMKAISER_STATE_FRAMES, 330L, 295,
-    ).copy(feedingFrameDurationMillis = 140L)
-    private val STORMKAISER_FEMALE = advancedStaticBattleSet(
+    )
+    private val STORMKAISER_FEMALE = advancedSet(
         R.drawable.loem_stormkaiser_female_idle_sheet, R.drawable.loem_stormkaiser_female_hungry_sheet,
         R.drawable.loem_stormkaiser_female_sleep_sheet, R.drawable.loem_stormkaiser_female_melon_sheet,
         R.drawable.loem_stormkaiser_female_ham_sheet,
+        R.drawable.loem_stormkaiser_female_battle_attack_sheet,
+        R.drawable.loem_stormkaiser_female_battle_hit_sheet,
+        R.drawable.loem_stormkaiser_female_battle_double_attack_sheet,
+        R.drawable.loem_stormkaiser_female_battle_double_hit_sheet,
+        R.drawable.loem_stormkaiser_female_battle_victory_sheet,
         STORMKAISER_STATE_FRAMES, 330L, 295,
-    ).copy(feedingFrameDurationMillis = 140L)
+    ).copy(
+        defeat = asset(
+            R.drawable.loem_stormkaiser_female_battle_defeat_sheet,
+            STORMKAISER_STATE_FRAMES,
+        ),
+    )
     private val ULTRA_COSMIC = LoemSpriteSet(
         idle = asset(R.drawable.loem_ultra_cosmic_idle_sheet, ULTRA_COSMIC_STATE_FRAMES),
         hungry = asset(R.drawable.loem_ultra_cosmic_hungry_sheet, ULTRA_COSMIC_STATE_FRAMES),
         sleep = asset(R.drawable.loem_ultra_cosmic_sleep_sheet, ULTRA_COSMIC_STATE_FRAMES),
         melon = asset(R.drawable.loem_ultra_cosmic_melon_sheet, ULTRA_COSMIC_STATE_FRAMES),
         ham = asset(R.drawable.loem_ultra_cosmic_ham_sheet, ULTRA_COSMIC_STATE_FRAMES),
+        attack = asset(R.drawable.loem_ultra_cosmic_battle_attack_sheet, ULTRA_COSMIC_STATE_FRAMES),
+        hit = asset(R.drawable.loem_ultra_cosmic_battle_hit_sheet, ULTRA_COSMIC_STATE_FRAMES),
+        doubleAttack = asset(R.drawable.loem_ultra_cosmic_battle_double_attack_sheet, ULTRA_COSMIC_STATE_FRAMES),
+        doubleHit = asset(R.drawable.loem_ultra_cosmic_battle_double_hit_sheet, ULTRA_COSMIC_STATE_FRAMES),
+        victory = asset(R.drawable.loem_ultra_cosmic_battle_victory_sheet, ULTRA_COSMIC_STATE_FRAMES),
+        defeat = asset(R.drawable.loem_ultra_cosmic_battle_defeat_sheet, ULTRA_COSMIC_STATE_FRAMES),
         homeFrameDurationMillis = 100L,
         feedingFrameDurationMillis = 100L,
         battleFrameDurationMillis = 100L,
@@ -2342,6 +2925,12 @@ private object LoemSpriteStateMachine {
         sleep = asset(R.drawable.loem_space_rift_urtoad_sleep_sheet, SPACE_RIFT_URTOAD_STATE_FRAMES),
         melon = asset(R.drawable.loem_space_rift_urtoad_melon_sheet, SPACE_RIFT_URTOAD_STATE_FRAMES),
         ham = asset(R.drawable.loem_space_rift_urtoad_ham_sheet, SPACE_RIFT_URTOAD_STATE_FRAMES),
+        attack = asset(R.drawable.loem_space_rift_urtoad_battle_attack_sheet, SPACE_RIFT_URTOAD_STATE_FRAMES),
+        hit = asset(R.drawable.loem_space_rift_urtoad_battle_hit_sheet, SPACE_RIFT_URTOAD_STATE_FRAMES),
+        doubleAttack = asset(R.drawable.loem_space_rift_urtoad_battle_double_attack_sheet, SPACE_RIFT_URTOAD_STATE_FRAMES),
+        doubleHit = asset(R.drawable.loem_space_rift_urtoad_battle_double_hit_sheet, SPACE_RIFT_URTOAD_STATE_FRAMES),
+        victory = asset(R.drawable.loem_space_rift_urtoad_battle_victory_sheet, SPACE_RIFT_URTOAD_STATE_FRAMES),
+        defeat = asset(R.drawable.loem_space_rift_urtoad_battle_defeat_sheet, SPACE_RIFT_URTOAD_STATE_FRAMES),
         homeFrameDurationMillis = 100L,
         feedingFrameDurationMillis = 100L,
         battleFrameDurationMillis = 100L,
@@ -2369,6 +2958,12 @@ private object LoemSpriteStateMachine {
             R.drawable.loem_space_rift_world_serpent_ham_sheet,
             SPACE_RIFT_WORLD_SERPENT_STATE_FRAMES,
         ),
+        attack = asset(R.drawable.loem_space_rift_world_serpent_battle_attack_sheet, SPACE_RIFT_WORLD_SERPENT_STATE_FRAMES),
+        hit = asset(R.drawable.loem_space_rift_world_serpent_battle_hit_sheet, SPACE_RIFT_WORLD_SERPENT_STATE_FRAMES),
+        doubleAttack = asset(R.drawable.loem_space_rift_world_serpent_battle_double_attack_sheet, SPACE_RIFT_WORLD_SERPENT_STATE_FRAMES),
+        doubleHit = asset(R.drawable.loem_space_rift_world_serpent_battle_double_hit_sheet, SPACE_RIFT_WORLD_SERPENT_STATE_FRAMES),
+        victory = asset(R.drawable.loem_space_rift_world_serpent_battle_victory_sheet, SPACE_RIFT_WORLD_SERPENT_STATE_FRAMES),
+        defeat = asset(R.drawable.loem_space_rift_world_serpent_battle_defeat_sheet, SPACE_RIFT_WORLD_SERPENT_STATE_FRAMES),
         homeFrameDurationMillis = 100L,
         feedingFrameDurationMillis = 100L,
         battleFrameDurationMillis = 100L,
@@ -2396,48 +2991,84 @@ private object LoemSpriteStateMachine {
             R.drawable.loem_space_rift_archmage_poop_ham_sheet,
             SPACE_RIFT_ARCHMAGE_POOP_STATE_FRAMES,
         ),
+        attack = asset(R.drawable.loem_space_rift_archmage_poop_battle_attack_sheet, SPACE_RIFT_ARCHMAGE_POOP_STATE_FRAMES),
+        hit = asset(R.drawable.loem_space_rift_archmage_poop_battle_hit_sheet, SPACE_RIFT_ARCHMAGE_POOP_STATE_FRAMES),
+        doubleAttack = asset(R.drawable.loem_space_rift_archmage_poop_battle_double_attack_sheet, SPACE_RIFT_ARCHMAGE_POOP_STATE_FRAMES),
+        doubleHit = asset(R.drawable.loem_space_rift_archmage_poop_battle_double_hit_sheet, SPACE_RIFT_ARCHMAGE_POOP_STATE_FRAMES),
+        victory = asset(R.drawable.loem_space_rift_archmage_poop_battle_victory_sheet, SPACE_RIFT_ARCHMAGE_POOP_STATE_FRAMES),
+        defeat = asset(R.drawable.loem_space_rift_archmage_poop_battle_defeat_sheet, SPACE_RIFT_ARCHMAGE_POOP_STATE_FRAMES),
         homeFrameDurationMillis = 100L,
         feedingFrameDurationMillis = 140L,
         battleFrameDurationMillis = 100L,
         largeHomeSprite = true,
         battleSizeDp = 300,
     )
-    private val WART_EMPEROR_MALE = advancedStaticBattleSet(
+    private val WART_EMPEROR_MALE = advancedSet(
         R.drawable.loem_wart_emperor_male_idle_sheet, R.drawable.loem_wart_emperor_male_hungry_sheet,
         R.drawable.loem_wart_emperor_male_sleep_sheet, R.drawable.loem_wart_emperor_male_melon_sheet,
         R.drawable.loem_wart_emperor_male_ham_sheet,
+        R.drawable.loem_wart_emperor_male_battle_attack_sheet,
+        R.drawable.loem_wart_emperor_male_battle_hit_sheet,
+        R.drawable.loem_wart_emperor_male_battle_double_attack_sheet,
+        R.drawable.loem_wart_emperor_male_battle_double_hit_sheet,
+        R.drawable.loem_wart_emperor_male_battle_victory_sheet,
         WART_EMPEROR_STATE_FRAMES, 330L, 295,
-    )
-    private val WART_EMPEROR_FEMALE = advancedStaticBattleSet(
+    ).copy(defeat = asset(R.drawable.loem_wart_emperor_male_battle_defeat_sheet, WART_EMPEROR_STATE_FRAMES))
+    private val WART_EMPEROR_FEMALE = advancedSet(
         R.drawable.loem_wart_emperor_female_idle_sheet, R.drawable.loem_wart_emperor_female_hungry_sheet,
         R.drawable.loem_wart_emperor_female_sleep_sheet, R.drawable.loem_wart_emperor_female_melon_sheet,
         R.drawable.loem_wart_emperor_female_ham_sheet,
+        R.drawable.loem_wart_emperor_female_battle_attack_sheet,
+        R.drawable.loem_wart_emperor_female_battle_hit_sheet,
+        R.drawable.loem_wart_emperor_female_battle_double_attack_sheet,
+        R.drawable.loem_wart_emperor_female_battle_double_hit_sheet,
+        R.drawable.loem_wart_emperor_female_battle_victory_sheet,
         WART_EMPEROR_STATE_FRAMES, 330L, 295,
-    )
-    private val GLOOM_WIZARD_MALE = advancedStaticBattleSet(
+    ).copy(defeat = asset(R.drawable.loem_wart_emperor_female_battle_defeat_sheet, WART_EMPEROR_STATE_FRAMES))
+    private val GLOOM_WIZARD_MALE = advancedSet(
         R.drawable.loem_gloom_wizard_poop_male_idle_sheet, R.drawable.loem_gloom_wizard_poop_male_hungry_sheet,
         R.drawable.loem_gloom_wizard_poop_male_sleep_sheet, R.drawable.loem_gloom_wizard_poop_male_melon_sheet,
         R.drawable.loem_gloom_wizard_poop_male_ham_sheet,
+        R.drawable.loem_gloom_wizard_poop_male_battle_attack_sheet,
+        R.drawable.loem_gloom_wizard_poop_male_battle_hit_sheet,
+        R.drawable.loem_gloom_wizard_poop_male_battle_double_attack_sheet,
+        R.drawable.loem_gloom_wizard_poop_male_battle_double_hit_sheet,
+        R.drawable.loem_gloom_wizard_poop_male_battle_victory_sheet,
         GLOOM_WIZARD_STATE_FRAMES, 300L, 295,
-    )
-    private val GLOOM_WIZARD_FEMALE = advancedStaticBattleSet(
+    ).copy(defeat = asset(R.drawable.loem_gloom_wizard_poop_male_battle_defeat_sheet, GLOOM_WIZARD_STATE_FRAMES))
+    private val GLOOM_WIZARD_FEMALE = advancedSet(
         R.drawable.loem_gloom_wizard_poop_female_idle_sheet, R.drawable.loem_gloom_wizard_poop_female_hungry_sheet,
         R.drawable.loem_gloom_wizard_poop_female_sleep_sheet, R.drawable.loem_gloom_wizard_poop_female_melon_sheet,
         R.drawable.loem_gloom_wizard_poop_female_ham_sheet,
+        R.drawable.loem_gloom_wizard_poop_female_battle_attack_sheet,
+        R.drawable.loem_gloom_wizard_poop_female_battle_hit_sheet,
+        R.drawable.loem_gloom_wizard_poop_female_battle_double_attack_sheet,
+        R.drawable.loem_gloom_wizard_poop_female_battle_double_hit_sheet,
+        R.drawable.loem_gloom_wizard_poop_female_battle_victory_sheet,
         GLOOM_WIZARD_STATE_FRAMES, 300L, 295,
-    )
-    private val ARMAGEDDON_MALE = advancedStaticBattleSet(
+    ).copy(defeat = asset(R.drawable.loem_gloom_wizard_poop_female_battle_defeat_sheet, GLOOM_WIZARD_STATE_FRAMES))
+    private val ARMAGEDDON_MALE = advancedSet(
         R.drawable.loem_armageddon_serpent_male_idle_sheet, R.drawable.loem_armageddon_serpent_male_hungry_sheet,
         R.drawable.loem_armageddon_serpent_male_sleep_sheet, R.drawable.loem_armageddon_serpent_male_melon_sheet,
         R.drawable.loem_armageddon_serpent_male_ham_sheet,
+        R.drawable.loem_armageddon_serpent_male_battle_attack_sheet,
+        R.drawable.loem_armageddon_serpent_male_battle_hit_sheet,
+        R.drawable.loem_armageddon_serpent_male_battle_double_attack_sheet,
+        R.drawable.loem_armageddon_serpent_male_battle_double_hit_sheet,
+        R.drawable.loem_armageddon_serpent_male_battle_victory_sheet,
         ARMAGEDDON_SERPENT_STATE_FRAMES, 330L, 305,
-    )
-    private val ARMAGEDDON_FEMALE = advancedStaticBattleSet(
+    ).copy(defeat = asset(R.drawable.loem_armageddon_serpent_male_battle_defeat_sheet, ARMAGEDDON_SERPENT_STATE_FRAMES))
+    private val ARMAGEDDON_FEMALE = advancedSet(
         R.drawable.loem_armageddon_serpent_female_idle_sheet, R.drawable.loem_armageddon_serpent_female_hungry_sheet,
         R.drawable.loem_armageddon_serpent_female_sleep_sheet, R.drawable.loem_armageddon_serpent_female_melon_sheet,
         R.drawable.loem_armageddon_serpent_female_ham_sheet,
+        R.drawable.loem_armageddon_serpent_female_battle_attack_sheet,
+        R.drawable.loem_armageddon_serpent_female_battle_hit_sheet,
+        R.drawable.loem_armageddon_serpent_female_battle_double_attack_sheet,
+        R.drawable.loem_armageddon_serpent_female_battle_double_hit_sheet,
+        R.drawable.loem_armageddon_serpent_female_battle_victory_sheet,
         ARMAGEDDON_SERPENT_STATE_FRAMES, 330L, 305,
-    )
+    ).copy(defeat = asset(R.drawable.loem_armageddon_serpent_female_battle_defeat_sheet, ARMAGEDDON_SERPENT_STATE_FRAMES))
 }
 
 private fun staticBattlePreviews(
@@ -2495,6 +3126,7 @@ private fun debugSpritePreviews(): List<DebugSpritePreview> = listOf(
     DebugSpritePreview("Majestätischer Flügel-Löm - Doppelangriff", R.drawable.loem_wing_evolution_battle_double_attack_sheet, MAJESTIC_WING_BATTLE_FRAMES, 2),
     DebugSpritePreview("Majestätischer Flügel-Löm - Doppeltreffer", R.drawable.loem_wing_evolution_battle_double_hit_sheet, MAJESTIC_WING_BATTLE_FRAMES, 2),
     DebugSpritePreview("Majestätischer Flügel-Löm - Sieg", R.drawable.loem_wing_evolution_battle_victory_sheet, MAJESTIC_WING_BATTLE_FRAMES, 2),
+    DebugSpritePreview("Majestätischer Flügel-Löm - Niederlage", R.drawable.loem_wing_evolution_battle_double_hit_sheet, MAJESTIC_WING_BATTLE_FRAMES, 2),
     DebugSpritePreview("Sturmkaiser-Löm - Idle", R.drawable.loem_stormkaiser_idle_sheet, STORMKAISER_STATE_FRAMES, 3),
     DebugSpritePreview("Sturmkaiser-Löm - hungrig", R.drawable.loem_stormkaiser_hungry_sheet, STORMKAISER_STATE_FRAMES, 3),
     DebugSpritePreview("Sturmkaiser-Löm - Schlaf", R.drawable.loem_stormkaiser_sleep_sheet, STORMKAISER_STATE_FRAMES, 3),
@@ -2505,36 +3137,62 @@ private fun debugSpritePreviews(): List<DebugSpritePreview> = listOf(
     DebugSpritePreview("Sturmkaiser-Löm - Doppelangriff", R.drawable.loem_stormkaiser_battle_double_attack_sheet, STORMKAISER_STATE_FRAMES, 3),
     DebugSpritePreview("Sturmkaiser-Löm - Doppeltreffer", R.drawable.loem_stormkaiser_battle_double_hit_sheet, STORMKAISER_STATE_FRAMES, 3),
     DebugSpritePreview("Sturmkaiser-Löm - Sieg", R.drawable.loem_stormkaiser_battle_victory_sheet, STORMKAISER_STATE_FRAMES, 3),
+    DebugSpritePreview("Sturmkaiser-Löm - Niederlage", R.drawable.loem_stormkaiser_battle_double_hit_sheet, STORMKAISER_STATE_FRAMES, 3),
     DebugSpritePreview("Sturmkaiserin-Löm - Idle", R.drawable.loem_stormkaiser_female_idle_sheet, STORMKAISER_STATE_FRAMES, 3),
     DebugSpritePreview("Sturmkaiserin-Löm - hungrig", R.drawable.loem_stormkaiser_female_hungry_sheet, STORMKAISER_STATE_FRAMES, 3),
     DebugSpritePreview("Sturmkaiserin-Löm - Schlaf", R.drawable.loem_stormkaiser_female_sleep_sheet, STORMKAISER_STATE_FRAMES, 3),
     DebugSpritePreview("Sturmkaiserin-Löm - Melone", R.drawable.loem_stormkaiser_female_melon_sheet, STORMKAISER_STATE_FRAMES, 3),
     DebugSpritePreview("Sturmkaiserin-Löm - Schinken", R.drawable.loem_stormkaiser_female_ham_sheet, STORMKAISER_STATE_FRAMES, 3),
-    *staticBattlePreviews("Sturmkaiserin-Löm", R.drawable.loem_stormkaiser_female_idle_sheet, STORMKAISER_STATE_FRAMES, 3),
+    DebugSpritePreview("Sturmkaiserin-Löm - Angriff", R.drawable.loem_stormkaiser_female_battle_attack_sheet, STORMKAISER_STATE_FRAMES, 3),
+    DebugSpritePreview("Sturmkaiserin-Löm - Treffer", R.drawable.loem_stormkaiser_female_battle_hit_sheet, STORMKAISER_STATE_FRAMES, 3),
+    DebugSpritePreview("Sturmkaiserin-Löm - Doppelangriff", R.drawable.loem_stormkaiser_female_battle_double_attack_sheet, STORMKAISER_STATE_FRAMES, 3),
+    DebugSpritePreview("Sturmkaiserin-Löm - Doppeltreffer", R.drawable.loem_stormkaiser_female_battle_double_hit_sheet, STORMKAISER_STATE_FRAMES, 3),
+    DebugSpritePreview("Sturmkaiserin-Löm - Sieg", R.drawable.loem_stormkaiser_female_battle_victory_sheet, STORMKAISER_STATE_FRAMES, 3),
+    DebugSpritePreview("Sturmkaiserin-Löm - Niederlage", R.drawable.loem_stormkaiser_female_battle_defeat_sheet, STORMKAISER_STATE_FRAMES, 3),
     DebugSpritePreview("Ultra-Raumriss-Löm - Idle", R.drawable.loem_ultra_cosmic_idle_sheet, ULTRA_COSMIC_STATE_FRAMES, 4),
     DebugSpritePreview("Ultra-Raumriss-Löm - hungrig", R.drawable.loem_ultra_cosmic_hungry_sheet, ULTRA_COSMIC_STATE_FRAMES, 4),
     DebugSpritePreview("Ultra-Raumriss-Löm - Schlaf", R.drawable.loem_ultra_cosmic_sleep_sheet, ULTRA_COSMIC_STATE_FRAMES, 4),
     DebugSpritePreview("Ultra-Raumriss-Löm - Melone", R.drawable.loem_ultra_cosmic_melon_sheet, ULTRA_COSMIC_STATE_FRAMES, 4),
     DebugSpritePreview("Ultra-Raumriss-Löm - Schinken", R.drawable.loem_ultra_cosmic_ham_sheet, ULTRA_COSMIC_STATE_FRAMES, 4),
-    *staticBattlePreviews("Ultra-Raumriss-Löm", R.drawable.loem_ultra_cosmic_idle_sheet, ULTRA_COSMIC_STATE_FRAMES, 4),
+    DebugSpritePreview("Ultra-Raumriss-Löm - Angriff", R.drawable.loem_ultra_cosmic_battle_attack_sheet, ULTRA_COSMIC_STATE_FRAMES, 4),
+    DebugSpritePreview("Ultra-Raumriss-Löm - Treffer", R.drawable.loem_ultra_cosmic_battle_hit_sheet, ULTRA_COSMIC_STATE_FRAMES, 4),
+    DebugSpritePreview("Ultra-Raumriss-Löm - Doppelangriff", R.drawable.loem_ultra_cosmic_battle_double_attack_sheet, ULTRA_COSMIC_STATE_FRAMES, 4),
+    DebugSpritePreview("Ultra-Raumriss-Löm - Doppeltreffer", R.drawable.loem_ultra_cosmic_battle_double_hit_sheet, ULTRA_COSMIC_STATE_FRAMES, 4),
+    DebugSpritePreview("Ultra-Raumriss-Löm - Sieg", R.drawable.loem_ultra_cosmic_battle_victory_sheet, ULTRA_COSMIC_STATE_FRAMES, 4),
+    DebugSpritePreview("Ultra-Raumriss-Löm - Niederlage", R.drawable.loem_ultra_cosmic_battle_defeat_sheet, ULTRA_COSMIC_STATE_FRAMES, 4),
     DebugSpritePreview("Raumriss-Urkröte - Idle", R.drawable.loem_space_rift_urtoad_idle_sheet, SPACE_RIFT_URTOAD_STATE_FRAMES, 4),
     DebugSpritePreview("Raumriss-Urkröte - hungrig", R.drawable.loem_space_rift_urtoad_hungry_sheet, SPACE_RIFT_URTOAD_STATE_FRAMES, 4),
     DebugSpritePreview("Raumriss-Urkröte - Schlaf", R.drawable.loem_space_rift_urtoad_sleep_sheet, SPACE_RIFT_URTOAD_STATE_FRAMES, 4),
     DebugSpritePreview("Raumriss-Urkröte - Melone", R.drawable.loem_space_rift_urtoad_melon_sheet, SPACE_RIFT_URTOAD_STATE_FRAMES, 4),
     DebugSpritePreview("Raumriss-Urkröte - Schinken", R.drawable.loem_space_rift_urtoad_ham_sheet, SPACE_RIFT_URTOAD_STATE_FRAMES, 4),
-    *staticBattlePreviews("Raumriss-Urkröte", R.drawable.loem_space_rift_urtoad_idle_sheet, SPACE_RIFT_URTOAD_STATE_FRAMES, 4),
+    DebugSpritePreview("Raumriss-Urkröte - Angriff", R.drawable.loem_space_rift_urtoad_battle_attack_sheet, SPACE_RIFT_URTOAD_STATE_FRAMES, 4),
+    DebugSpritePreview("Raumriss-Urkröte - Treffer", R.drawable.loem_space_rift_urtoad_battle_hit_sheet, SPACE_RIFT_URTOAD_STATE_FRAMES, 4),
+    DebugSpritePreview("Raumriss-Urkröte - Doppelangriff", R.drawable.loem_space_rift_urtoad_battle_double_attack_sheet, SPACE_RIFT_URTOAD_STATE_FRAMES, 4),
+    DebugSpritePreview("Raumriss-Urkröte - Doppeltreffer", R.drawable.loem_space_rift_urtoad_battle_double_hit_sheet, SPACE_RIFT_URTOAD_STATE_FRAMES, 4),
+    DebugSpritePreview("Raumriss-Urkröte - Sieg", R.drawable.loem_space_rift_urtoad_battle_victory_sheet, SPACE_RIFT_URTOAD_STATE_FRAMES, 4),
+    DebugSpritePreview("Raumriss-Urkröte - Niederlage", R.drawable.loem_space_rift_urtoad_battle_defeat_sheet, SPACE_RIFT_URTOAD_STATE_FRAMES, 4),
     DebugSpritePreview("Raumriss-Weltschlange - Idle", R.drawable.loem_space_rift_world_serpent_idle_sheet, SPACE_RIFT_WORLD_SERPENT_STATE_FRAMES, 4),
     DebugSpritePreview("Raumriss-Weltschlange - hungrig", R.drawable.loem_space_rift_world_serpent_hungry_sheet, SPACE_RIFT_WORLD_SERPENT_STATE_FRAMES, 4),
     DebugSpritePreview("Raumriss-Weltschlange - Schlaf", R.drawable.loem_space_rift_world_serpent_sleep_sheet, SPACE_RIFT_WORLD_SERPENT_STATE_FRAMES, 4),
     DebugSpritePreview("Raumriss-Weltschlange - Melone", R.drawable.loem_space_rift_world_serpent_melon_sheet, SPACE_RIFT_WORLD_SERPENT_STATE_FRAMES, 4),
     DebugSpritePreview("Raumriss-Weltschlange - Schinken", R.drawable.loem_space_rift_world_serpent_ham_sheet, SPACE_RIFT_WORLD_SERPENT_STATE_FRAMES, 4),
-    *staticBattlePreviews("Raumriss-Weltschlange", R.drawable.loem_space_rift_world_serpent_idle_sheet, SPACE_RIFT_WORLD_SERPENT_STATE_FRAMES, 4),
+    DebugSpritePreview("Raumriss-Weltschlange - Angriff", R.drawable.loem_space_rift_world_serpent_battle_attack_sheet, SPACE_RIFT_WORLD_SERPENT_STATE_FRAMES, 4),
+    DebugSpritePreview("Raumriss-Weltschlange - Treffer", R.drawable.loem_space_rift_world_serpent_battle_hit_sheet, SPACE_RIFT_WORLD_SERPENT_STATE_FRAMES, 4),
+    DebugSpritePreview("Raumriss-Weltschlange - Doppelangriff", R.drawable.loem_space_rift_world_serpent_battle_double_attack_sheet, SPACE_RIFT_WORLD_SERPENT_STATE_FRAMES, 4),
+    DebugSpritePreview("Raumriss-Weltschlange - Doppeltreffer", R.drawable.loem_space_rift_world_serpent_battle_double_hit_sheet, SPACE_RIFT_WORLD_SERPENT_STATE_FRAMES, 4),
+    DebugSpritePreview("Raumriss-Weltschlange - Sieg", R.drawable.loem_space_rift_world_serpent_battle_victory_sheet, SPACE_RIFT_WORLD_SERPENT_STATE_FRAMES, 4),
+    DebugSpritePreview("Raumriss-Weltschlange - Niederlage", R.drawable.loem_space_rift_world_serpent_battle_defeat_sheet, SPACE_RIFT_WORLD_SERPENT_STATE_FRAMES, 4),
     DebugSpritePreview("Ultra-Armageddon-Raumriss-Erzmagierhaufen-Löm - Idle", R.drawable.loem_space_rift_archmage_poop_idle_sheet, SPACE_RIFT_ARCHMAGE_POOP_STATE_FRAMES, 4),
     DebugSpritePreview("Ultra-Armageddon-Raumriss-Erzmagierhaufen-Löm - hungrig", R.drawable.loem_space_rift_archmage_poop_hungry_sheet, SPACE_RIFT_ARCHMAGE_POOP_STATE_FRAMES, 4),
     DebugSpritePreview("Ultra-Armageddon-Raumriss-Erzmagierhaufen-Löm - Schlaf", R.drawable.loem_space_rift_archmage_poop_sleep_sheet, SPACE_RIFT_ARCHMAGE_POOP_STATE_FRAMES, 4),
     DebugSpritePreview("Ultra-Armageddon-Raumriss-Erzmagierhaufen-Löm - Melone", R.drawable.loem_space_rift_archmage_poop_melon_sheet, SPACE_RIFT_ARCHMAGE_POOP_STATE_FRAMES, 4),
     DebugSpritePreview("Ultra-Armageddon-Raumriss-Erzmagierhaufen-Löm - Schinken", R.drawable.loem_space_rift_archmage_poop_ham_sheet, SPACE_RIFT_ARCHMAGE_POOP_STATE_FRAMES, 4),
-    *staticBattlePreviews("Ultra-Armageddon-Raumriss-Erzmagierhaufen-Löm", R.drawable.loem_space_rift_archmage_poop_idle_sheet, SPACE_RIFT_ARCHMAGE_POOP_STATE_FRAMES, 4),
+    DebugSpritePreview("Ultra-Armageddon-Raumriss-Erzmagierhaufen-Löm - Angriff", R.drawable.loem_space_rift_archmage_poop_battle_attack_sheet, SPACE_RIFT_ARCHMAGE_POOP_STATE_FRAMES, 4),
+    DebugSpritePreview("Ultra-Armageddon-Raumriss-Erzmagierhaufen-Löm - Treffer", R.drawable.loem_space_rift_archmage_poop_battle_hit_sheet, SPACE_RIFT_ARCHMAGE_POOP_STATE_FRAMES, 4),
+    DebugSpritePreview("Ultra-Armageddon-Raumriss-Erzmagierhaufen-Löm - Doppelangriff", R.drawable.loem_space_rift_archmage_poop_battle_double_attack_sheet, SPACE_RIFT_ARCHMAGE_POOP_STATE_FRAMES, 4),
+    DebugSpritePreview("Ultra-Armageddon-Raumriss-Erzmagierhaufen-Löm - Doppeltreffer", R.drawable.loem_space_rift_archmage_poop_battle_double_hit_sheet, SPACE_RIFT_ARCHMAGE_POOP_STATE_FRAMES, 4),
+    DebugSpritePreview("Ultra-Armageddon-Raumriss-Erzmagierhaufen-Löm - Sieg", R.drawable.loem_space_rift_archmage_poop_battle_victory_sheet, SPACE_RIFT_ARCHMAGE_POOP_STATE_FRAMES, 4),
+    DebugSpritePreview("Ultra-Armageddon-Raumriss-Erzmagierhaufen-Löm - Niederlage", R.drawable.loem_space_rift_archmage_poop_battle_defeat_sheet, SPACE_RIFT_ARCHMAGE_POOP_STATE_FRAMES, 4),
     DebugSpritePreview("Flügel-Löm - hungrig", R.drawable.loem_good_hungry_sheet, GOOD_HUNGRY_FRAMES, 1),
     DebugSpritePreview("Flügel-Löm - Schlaf", R.drawable.loem_good_sleep_sheet, GOOD_SLEEP_FRAMES, 1),
     DebugSpritePreview("Flügel-Löm - Melone", R.drawable.loem_good_melon_sheet, GOOD_MELON_FRAMES, 1),
@@ -2544,29 +3202,51 @@ private fun debugSpritePreviews(): List<DebugSpritePreview> = listOf(
     DebugSpritePreview("Flügel-Löm - Doppelangriff", R.drawable.loem_good_battle_double_attack_sheet, GOOD_BATTLE_FRAMES, 1),
     DebugSpritePreview("Flügel-Löm - Doppeltreffer", R.drawable.loem_good_battle_double_hit_sheet, GOOD_BATTLE_FRAMES, 1),
     DebugSpritePreview("Flügel-Löm - Sieg", R.drawable.loem_good_battle_victory_sheet, GOOD_BATTLE_FRAMES, 1),
+    DebugSpritePreview("Flügel-Löm - Niederlage", R.drawable.loem_good_battle_double_hit_sheet, GOOD_BATTLE_FRAMES, 1),
     DebugSpritePreview("Wurst-Löm - Idle", R.drawable.loem_bad_evolution_sheet, BAD_EVOLUTION_FRAMES, 1),
     DebugSpritePreview("Wurst-Löm - hungrig", R.drawable.loem_bad_hungry_sheet, BAD_HUNGRY_FRAMES, 1),
     DebugSpritePreview("Wurst-Löm - Schlaf", R.drawable.loem_bad_sleep_sheet, BAD_SLEEP_FRAMES, 1),
     DebugSpritePreview("Wurst-Löm - Melone", R.drawable.loem_bad_melon_sheet, BAD_MELON_FRAMES, 1),
     DebugSpritePreview("Wurst-Löm - Schinken", R.drawable.loem_bad_ham_sheet, BAD_HAM_FRAMES, 1),
+    DebugSpritePreview("Wurst-Löm - Angriff", R.drawable.loem_bad_battle_attack_sheet, BAD_BATTLE_FRAMES, 1),
+    DebugSpritePreview("Wurst-Löm - Treffer", R.drawable.loem_bad_battle_hit_sheet, BAD_BATTLE_FRAMES, 1),
+    DebugSpritePreview("Wurst-Löm - Doppelangriff", R.drawable.loem_bad_battle_double_attack_sheet, BAD_BATTLE_FRAMES, 1),
+    DebugSpritePreview("Wurst-Löm - Doppeltreffer", R.drawable.loem_bad_battle_double_hit_sheet, BAD_BATTLE_FRAMES, 1),
+    DebugSpritePreview("Wurst-Löm - Sieg", R.drawable.loem_bad_battle_victory_sheet, BAD_BATTLE_FRAMES, 1),
+    DebugSpritePreview("Wurst-Löm - Niederlage", R.drawable.loem_bad_battle_defeat_sheet, BAD_BATTLE_FRAMES, 1),
     DebugSpritePreview("Matschkröten-Löm - Idle", R.drawable.loem_mud_toad_idle_sheet, MUD_TOAD_STATE_FRAMES, 2),
     DebugSpritePreview("Matschkröten-Löm - hungrig", R.drawable.loem_mud_toad_hungry_sheet, MUD_TOAD_STATE_FRAMES, 2),
     DebugSpritePreview("Matschkröten-Löm - Schlaf", R.drawable.loem_mud_toad_sleep_sheet, MUD_TOAD_STATE_FRAMES, 2),
     DebugSpritePreview("Matschkröten-Löm - Melone", R.drawable.loem_mud_toad_melon_sheet, MUD_TOAD_STATE_FRAMES, 2),
     DebugSpritePreview("Matschkröten-Löm - Schinken", R.drawable.loem_mud_toad_ham_sheet, MUD_TOAD_STATE_FRAMES, 2),
-    *staticBattlePreviews("Matschkröten-Löm", R.drawable.loem_mud_toad_idle_sheet, MUD_TOAD_STATE_FRAMES, 2),
+    DebugSpritePreview("Matschkröten-Löm - Angriff", R.drawable.loem_mud_toad_battle_attack_sheet, MUD_TOAD_STATE_FRAMES, 2),
+    DebugSpritePreview("Matschkröten-Löm - Treffer", R.drawable.loem_mud_toad_battle_hit_sheet, MUD_TOAD_STATE_FRAMES, 2),
+    DebugSpritePreview("Matschkröten-Löm - Doppelangriff", R.drawable.loem_mud_toad_battle_double_attack_sheet, MUD_TOAD_STATE_FRAMES, 2),
+    DebugSpritePreview("Matschkröten-Löm - Doppeltreffer", R.drawable.loem_mud_toad_battle_defeat_sheet, MUD_TOAD_STATE_FRAMES, 2),
+    DebugSpritePreview("Matschkröten-Löm - Sieg", R.drawable.loem_mud_toad_battle_victory_sheet, MUD_TOAD_STATE_FRAMES, 2),
+    DebugSpritePreview("Matschkröten-Löm - Niederlage", R.drawable.loem_mud_toad_battle_defeat_sheet, MUD_TOAD_STATE_FRAMES, 2),
     DebugSpritePreview("Warzenkaiser-Löm - Idle", R.drawable.loem_wart_emperor_male_idle_sheet, WART_EMPEROR_STATE_FRAMES, 3),
     DebugSpritePreview("Warzenkaiser-Löm - hungrig", R.drawable.loem_wart_emperor_male_hungry_sheet, WART_EMPEROR_STATE_FRAMES, 3),
     DebugSpritePreview("Warzenkaiser-Löm - Schlaf", R.drawable.loem_wart_emperor_male_sleep_sheet, WART_EMPEROR_STATE_FRAMES, 3),
     DebugSpritePreview("Warzenkaiser-Löm - Melone", R.drawable.loem_wart_emperor_male_melon_sheet, WART_EMPEROR_STATE_FRAMES, 3),
     DebugSpritePreview("Warzenkaiser-Löm - Schinken", R.drawable.loem_wart_emperor_male_ham_sheet, WART_EMPEROR_STATE_FRAMES, 3),
-    *staticBattlePreviews("Warzenkaiser-Löm", R.drawable.loem_wart_emperor_male_idle_sheet, WART_EMPEROR_STATE_FRAMES, 3),
+    DebugSpritePreview("Warzenkaiser-Löm - Angriff", R.drawable.loem_wart_emperor_male_battle_attack_sheet, WART_EMPEROR_STATE_FRAMES, 3),
+    DebugSpritePreview("Warzenkaiser-Löm - Treffer", R.drawable.loem_wart_emperor_male_battle_hit_sheet, WART_EMPEROR_STATE_FRAMES, 3),
+    DebugSpritePreview("Warzenkaiser-Löm - Doppelangriff", R.drawable.loem_wart_emperor_male_battle_double_attack_sheet, WART_EMPEROR_STATE_FRAMES, 3),
+    DebugSpritePreview("Warzenkaiser-Löm - Doppeltreffer", R.drawable.loem_wart_emperor_male_battle_double_hit_sheet, WART_EMPEROR_STATE_FRAMES, 3),
+    DebugSpritePreview("Warzenkaiser-Löm - Sieg", R.drawable.loem_wart_emperor_male_battle_victory_sheet, WART_EMPEROR_STATE_FRAMES, 3),
+    DebugSpritePreview("Warzenkaiser-Löm - Niederlage", R.drawable.loem_wart_emperor_male_battle_defeat_sheet, WART_EMPEROR_STATE_FRAMES, 3),
     DebugSpritePreview("Warzenkaiserin-Löm - Idle", R.drawable.loem_wart_emperor_female_idle_sheet, WART_EMPEROR_STATE_FRAMES, 3),
     DebugSpritePreview("Warzenkaiserin-Löm - hungrig", R.drawable.loem_wart_emperor_female_hungry_sheet, WART_EMPEROR_STATE_FRAMES, 3),
     DebugSpritePreview("Warzenkaiserin-Löm - Schlaf", R.drawable.loem_wart_emperor_female_sleep_sheet, WART_EMPEROR_STATE_FRAMES, 3),
     DebugSpritePreview("Warzenkaiserin-Löm - Melone", R.drawable.loem_wart_emperor_female_melon_sheet, WART_EMPEROR_STATE_FRAMES, 3),
     DebugSpritePreview("Warzenkaiserin-Löm - Schinken", R.drawable.loem_wart_emperor_female_ham_sheet, WART_EMPEROR_STATE_FRAMES, 3),
-    *staticBattlePreviews("Warzenkaiserin-Löm", R.drawable.loem_wart_emperor_female_idle_sheet, WART_EMPEROR_STATE_FRAMES, 3),
+    DebugSpritePreview("Warzenkaiserin-Löm - Angriff", R.drawable.loem_wart_emperor_female_battle_attack_sheet, WART_EMPEROR_STATE_FRAMES, 3),
+    DebugSpritePreview("Warzenkaiserin-Löm - Treffer", R.drawable.loem_wart_emperor_female_battle_hit_sheet, WART_EMPEROR_STATE_FRAMES, 3),
+    DebugSpritePreview("Warzenkaiserin-Löm - Doppelangriff", R.drawable.loem_wart_emperor_female_battle_double_attack_sheet, WART_EMPEROR_STATE_FRAMES, 3),
+    DebugSpritePreview("Warzenkaiserin-Löm - Doppeltreffer", R.drawable.loem_wart_emperor_female_battle_double_hit_sheet, WART_EMPEROR_STATE_FRAMES, 3),
+    DebugSpritePreview("Warzenkaiserin-Löm - Sieg", R.drawable.loem_wart_emperor_female_battle_victory_sheet, WART_EMPEROR_STATE_FRAMES, 3),
+    DebugSpritePreview("Warzenkaiserin-Löm - Niederlage", R.drawable.loem_wart_emperor_female_battle_defeat_sheet, WART_EMPEROR_STATE_FRAMES, 3),
     DebugSpritePreview("Haufen-Löm - Idle", R.drawable.loem_poop_evolution_idle_sheet, POOP_STATE_FRAMES, 2),
     DebugSpritePreview("Haufen-Löm - hungrig", R.drawable.loem_poop_hungry_sheet, POOP_STATE_FRAMES, 2),
     DebugSpritePreview("Haufen-Löm - Schlaf", R.drawable.loem_poop_sleep_sheet, POOP_STATE_FRAMES, 2),
@@ -2577,30 +3257,51 @@ private fun debugSpritePreviews(): List<DebugSpritePreview> = listOf(
     DebugSpritePreview("Haufen-Löm - Doppelangriff", R.drawable.loem_poop_battle_double_attack_sheet, POOP_BATTLE_FRAMES, 2),
     DebugSpritePreview("Haufen-Löm - Doppeltreffer", R.drawable.loem_poop_battle_double_hit_sheet, POOP_BATTLE_FRAMES, 2),
     DebugSpritePreview("Haufen-Löm - Sieg", R.drawable.loem_poop_battle_victory_sheet, POOP_BATTLE_FRAMES, 2),
+    DebugSpritePreview("Haufen-Löm - Niederlage", R.drawable.loem_poop_battle_double_hit_sheet, POOP_BATTLE_FRAMES, 2),
     DebugSpritePreview("Trübsal-Zauberhaufen-Löm - Idle", R.drawable.loem_gloom_wizard_poop_male_idle_sheet, GLOOM_WIZARD_STATE_FRAMES, 3),
     DebugSpritePreview("Trübsal-Zauberhaufen-Löm - hungrig", R.drawable.loem_gloom_wizard_poop_male_hungry_sheet, GLOOM_WIZARD_STATE_FRAMES, 3),
     DebugSpritePreview("Trübsal-Zauberhaufen-Löm - Schlaf", R.drawable.loem_gloom_wizard_poop_male_sleep_sheet, GLOOM_WIZARD_STATE_FRAMES, 3),
     DebugSpritePreview("Trübsal-Zauberhaufen-Löm - Melone", R.drawable.loem_gloom_wizard_poop_male_melon_sheet, GLOOM_WIZARD_STATE_FRAMES, 3),
     DebugSpritePreview("Trübsal-Zauberhaufen-Löm - Schinken", R.drawable.loem_gloom_wizard_poop_male_ham_sheet, GLOOM_WIZARD_STATE_FRAMES, 3),
-    *staticBattlePreviews("Trübsal-Zauberhaufen-Löm", R.drawable.loem_gloom_wizard_poop_male_idle_sheet, GLOOM_WIZARD_STATE_FRAMES, 3),
+    DebugSpritePreview("Trübsal-Zauberhaufen-Löm - Angriff", R.drawable.loem_gloom_wizard_poop_male_battle_attack_sheet, GLOOM_WIZARD_STATE_FRAMES, 3),
+    DebugSpritePreview("Trübsal-Zauberhaufen-Löm - Treffer", R.drawable.loem_gloom_wizard_poop_male_battle_hit_sheet, GLOOM_WIZARD_STATE_FRAMES, 3),
+    DebugSpritePreview("Trübsal-Zauberhaufen-Löm - Doppelangriff", R.drawable.loem_gloom_wizard_poop_male_battle_double_attack_sheet, GLOOM_WIZARD_STATE_FRAMES, 3),
+    DebugSpritePreview("Trübsal-Zauberhaufen-Löm - Doppeltreffer", R.drawable.loem_gloom_wizard_poop_male_battle_double_hit_sheet, GLOOM_WIZARD_STATE_FRAMES, 3),
+    DebugSpritePreview("Trübsal-Zauberhaufen-Löm - Sieg", R.drawable.loem_gloom_wizard_poop_male_battle_victory_sheet, GLOOM_WIZARD_STATE_FRAMES, 3),
+    DebugSpritePreview("Trübsal-Zauberhaufen-Löm - Niederlage", R.drawable.loem_gloom_wizard_poop_male_battle_defeat_sheet, GLOOM_WIZARD_STATE_FRAMES, 3),
     DebugSpritePreview("Trübsal-Zauberhaufen-Lömin - Idle", R.drawable.loem_gloom_wizard_poop_female_idle_sheet, GLOOM_WIZARD_STATE_FRAMES, 3),
     DebugSpritePreview("Trübsal-Zauberhaufen-Lömin - hungrig", R.drawable.loem_gloom_wizard_poop_female_hungry_sheet, GLOOM_WIZARD_STATE_FRAMES, 3),
     DebugSpritePreview("Trübsal-Zauberhaufen-Lömin - Schlaf", R.drawable.loem_gloom_wizard_poop_female_sleep_sheet, GLOOM_WIZARD_STATE_FRAMES, 3),
     DebugSpritePreview("Trübsal-Zauberhaufen-Lömin - Melone", R.drawable.loem_gloom_wizard_poop_female_melon_sheet, GLOOM_WIZARD_STATE_FRAMES, 3),
     DebugSpritePreview("Trübsal-Zauberhaufen-Lömin - Schinken", R.drawable.loem_gloom_wizard_poop_female_ham_sheet, GLOOM_WIZARD_STATE_FRAMES, 3),
-    *staticBattlePreviews("Trübsal-Zauberhaufen-Lömin", R.drawable.loem_gloom_wizard_poop_female_idle_sheet, GLOOM_WIZARD_STATE_FRAMES, 3),
+    DebugSpritePreview("Trübsal-Zauberhaufen-Lömin - Angriff", R.drawable.loem_gloom_wizard_poop_female_battle_attack_sheet, GLOOM_WIZARD_STATE_FRAMES, 3),
+    DebugSpritePreview("Trübsal-Zauberhaufen-Lömin - Treffer", R.drawable.loem_gloom_wizard_poop_female_battle_hit_sheet, GLOOM_WIZARD_STATE_FRAMES, 3),
+    DebugSpritePreview("Trübsal-Zauberhaufen-Lömin - Doppelangriff", R.drawable.loem_gloom_wizard_poop_female_battle_double_attack_sheet, GLOOM_WIZARD_STATE_FRAMES, 3),
+    DebugSpritePreview("Trübsal-Zauberhaufen-Lömin - Doppeltreffer", R.drawable.loem_gloom_wizard_poop_female_battle_double_hit_sheet, GLOOM_WIZARD_STATE_FRAMES, 3),
+    DebugSpritePreview("Trübsal-Zauberhaufen-Lömin - Sieg", R.drawable.loem_gloom_wizard_poop_female_battle_victory_sheet, GLOOM_WIZARD_STATE_FRAMES, 3),
+    DebugSpritePreview("Trübsal-Zauberhaufen-Lömin - Niederlage", R.drawable.loem_gloom_wizard_poop_female_battle_defeat_sheet, GLOOM_WIZARD_STATE_FRAMES, 3),
     DebugSpritePreview("Armageddon-Prunkschlangenkaiser-Löm - Idle", R.drawable.loem_armageddon_serpent_male_idle_sheet, ARMAGEDDON_SERPENT_STATE_FRAMES, 3),
     DebugSpritePreview("Armageddon-Prunkschlangenkaiser-Löm - hungrig", R.drawable.loem_armageddon_serpent_male_hungry_sheet, ARMAGEDDON_SERPENT_STATE_FRAMES, 3),
     DebugSpritePreview("Armageddon-Prunkschlangenkaiser-Löm - Schlaf", R.drawable.loem_armageddon_serpent_male_sleep_sheet, ARMAGEDDON_SERPENT_STATE_FRAMES, 3),
     DebugSpritePreview("Armageddon-Prunkschlangenkaiser-Löm - Melone", R.drawable.loem_armageddon_serpent_male_melon_sheet, ARMAGEDDON_SERPENT_STATE_FRAMES, 3),
     DebugSpritePreview("Armageddon-Prunkschlangenkaiser-Löm - Schinken", R.drawable.loem_armageddon_serpent_male_ham_sheet, ARMAGEDDON_SERPENT_STATE_FRAMES, 3),
-    *staticBattlePreviews("Armageddon-Prunkschlangenkaiser-Löm", R.drawable.loem_armageddon_serpent_male_idle_sheet, ARMAGEDDON_SERPENT_STATE_FRAMES, 3),
+    DebugSpritePreview("Armageddon-Prunkschlangenkaiser-Löm - Angriff", R.drawable.loem_armageddon_serpent_male_battle_attack_sheet, ARMAGEDDON_SERPENT_STATE_FRAMES, 3),
+    DebugSpritePreview("Armageddon-Prunkschlangenkaiser-Löm - Treffer", R.drawable.loem_armageddon_serpent_male_battle_hit_sheet, ARMAGEDDON_SERPENT_STATE_FRAMES, 3),
+    DebugSpritePreview("Armageddon-Prunkschlangenkaiser-Löm - Doppelangriff", R.drawable.loem_armageddon_serpent_male_battle_double_attack_sheet, ARMAGEDDON_SERPENT_STATE_FRAMES, 3),
+    DebugSpritePreview("Armageddon-Prunkschlangenkaiser-Löm - Doppeltreffer", R.drawable.loem_armageddon_serpent_male_battle_double_hit_sheet, ARMAGEDDON_SERPENT_STATE_FRAMES, 3),
+    DebugSpritePreview("Armageddon-Prunkschlangenkaiser-Löm - Sieg", R.drawable.loem_armageddon_serpent_male_battle_victory_sheet, ARMAGEDDON_SERPENT_STATE_FRAMES, 3),
+    DebugSpritePreview("Armageddon-Prunkschlangenkaiser-Löm - Niederlage", R.drawable.loem_armageddon_serpent_male_battle_defeat_sheet, ARMAGEDDON_SERPENT_STATE_FRAMES, 3),
     DebugSpritePreview("Armageddon-Prunkschlangenkaiserin-Löm - Idle", R.drawable.loem_armageddon_serpent_female_idle_sheet, ARMAGEDDON_SERPENT_STATE_FRAMES, 3),
     DebugSpritePreview("Armageddon-Prunkschlangenkaiserin-Löm - hungrig", R.drawable.loem_armageddon_serpent_female_hungry_sheet, ARMAGEDDON_SERPENT_STATE_FRAMES, 3),
     DebugSpritePreview("Armageddon-Prunkschlangenkaiserin-Löm - Schlaf", R.drawable.loem_armageddon_serpent_female_sleep_sheet, ARMAGEDDON_SERPENT_STATE_FRAMES, 3),
     DebugSpritePreview("Armageddon-Prunkschlangenkaiserin-Löm - Melone", R.drawable.loem_armageddon_serpent_female_melon_sheet, ARMAGEDDON_SERPENT_STATE_FRAMES, 3),
     DebugSpritePreview("Armageddon-Prunkschlangenkaiserin-Löm - Schinken", R.drawable.loem_armageddon_serpent_female_ham_sheet, ARMAGEDDON_SERPENT_STATE_FRAMES, 3),
-    *staticBattlePreviews("Armageddon-Prunkschlangenkaiserin-Löm", R.drawable.loem_armageddon_serpent_female_idle_sheet, ARMAGEDDON_SERPENT_STATE_FRAMES, 3),
+    DebugSpritePreview("Armageddon-Prunkschlangenkaiserin-Löm - Angriff", R.drawable.loem_armageddon_serpent_female_battle_attack_sheet, ARMAGEDDON_SERPENT_STATE_FRAMES, 3),
+    DebugSpritePreview("Armageddon-Prunkschlangenkaiserin-Löm - Treffer", R.drawable.loem_armageddon_serpent_female_battle_hit_sheet, ARMAGEDDON_SERPENT_STATE_FRAMES, 3),
+    DebugSpritePreview("Armageddon-Prunkschlangenkaiserin-Löm - Doppelangriff", R.drawable.loem_armageddon_serpent_female_battle_double_attack_sheet, ARMAGEDDON_SERPENT_STATE_FRAMES, 3),
+    DebugSpritePreview("Armageddon-Prunkschlangenkaiserin-Löm - Doppeltreffer", R.drawable.loem_armageddon_serpent_female_battle_double_hit_sheet, ARMAGEDDON_SERPENT_STATE_FRAMES, 3),
+    DebugSpritePreview("Armageddon-Prunkschlangenkaiserin-Löm - Sieg", R.drawable.loem_armageddon_serpent_female_battle_victory_sheet, ARMAGEDDON_SERPENT_STATE_FRAMES, 3),
+    DebugSpritePreview("Armageddon-Prunkschlangenkaiserin-Löm - Niederlage", R.drawable.loem_armageddon_serpent_female_battle_defeat_sheet, ARMAGEDDON_SERPENT_STATE_FRAMES, 3),
     DebugSpritePreview(
         "Prunkschlangen-Löm - Idle",
         R.drawable.loem_serpent_evolution_idle_sheet,
@@ -2642,6 +3343,7 @@ private fun debugSpritePreviews(): List<DebugSpritePreview> = listOf(
     DebugSpritePreview("Prunkschlangen-Löm - Doppelangriff", R.drawable.loem_serpent_battle_double_attack_sheet, SERPENT_BATTLE_FRAMES, 2),
     DebugSpritePreview("Prunkschlangen-Löm - Doppeltreffer", R.drawable.loem_serpent_battle_double_hit_sheet, SERPENT_BATTLE_FRAMES, 2),
     DebugSpritePreview("Prunkschlangen-Löm - Sieg", R.drawable.loem_serpent_battle_victory_sheet, SERPENT_BATTLE_FRAMES, 2),
+    DebugSpritePreview("Prunkschlangen-Löm - Niederlage", R.drawable.loem_serpent_battle_double_hit_sheet, SERPENT_BATTLE_FRAMES, 2),
 )
 
 internal fun recolorBody(source: Bitmap, color: LoemColor): Bitmap {
@@ -2700,10 +3402,10 @@ private fun TrainingGameScreen(
     val currentTrainingWindow = state.ageMillis(nowMillis) / TRAINING_BONUS_WINDOW_MILLIS
     val creditedWinsInWindow =
         if (state.trainingWinWindow == currentTrainingWindow) state.trainingWinsInWindow else 0
-    var round by remember { mutableStateOf(0) }
-    var score by remember { mutableStateOf(0) }
-    var result by remember { mutableStateOf<Boolean?>(null) }
-    var lastHit by remember { mutableStateOf("Triff die grüne Mitte!") }
+    var round by rememberSaveable { mutableIntStateOf(0) }
+    var score by rememberSaveable { mutableIntStateOf(0) }
+    var result by rememberSaveable { mutableStateOf<Boolean?>(null) }
+    var lastHit by rememberSaveable { mutableStateOf("Triff die markierte Mitte!") }
     val transition = rememberInfiniteTransition(label = "training-marker")
     val markerPosition by transition.animateFloat(
         initialValue = 0f,
@@ -2729,13 +3431,13 @@ private fun TrainingGameScreen(
     }
 
     Column(
-        modifier = Modifier.fillMaxSize().padding(24.dp),
+        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
         Text("Treffertraining", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(8.dp))
-        Text("Drei Angriffe – Grün trifft am stärksten.")
+        Text("Sammle mindestens 6 Punkte aus 3 Angriffen. Die Mitte gibt 3 Punkte.")
         Spacer(Modifier.height(20.dp))
         Text("Runde ${round.coerceAtMost(2) + 1} / 3 · Punkte: $score")
         Spacer(Modifier.height(12.dp))
@@ -2747,6 +3449,7 @@ private fun TrainingGameScreen(
         val finished = result != null
         if (!finished) {
             Button(
+                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
                 onClick = {
                     val distance = abs(markerPosition - 0.5f)
                     val points = when {
@@ -2786,17 +3489,16 @@ private fun TrainingGameScreen(
                     round = 0
                     score = 0
                     result = null
-                    lastHit = "Triff die grüne Mitte!"
+                    lastHit = "Triff die markierte Mitte!"
                 },
             ) {
                 Text("Nochmal trainieren")
             }
         }
         Spacer(Modifier.height(16.dp))
-        Text("Zufriedenheit: ${state.currentHappiness(nowMillis)} % · Trainings: ${state.trainingSessions}")
+        Text("Zufriedenheit: ${state.currentHappiness(nowMillis)} %", style = MaterialTheme.typography.bodyMedium)
         Text(
-            "Bonus-Siege in diesem 6-Stunden-Fenster: " +
-                "$creditedWinsInWindow / $MAX_TRAINING_WINS_PER_WINDOW",
+            "Trainingsbonus: $creditedWinsInWindow / $MAX_TRAINING_WINS_PER_WINDOW Siege · alle 6 Stunden neu",
             style = MaterialTheme.typography.bodySmall,
         )
     }
@@ -2824,6 +3526,12 @@ private fun TimingBar(markerPosition: Float) {
             topLeft = Offset(size.width * 0.40f, barTop),
             size = Size(size.width * 0.20f, barHeight),
         )
+        drawRect(
+            color = Color(0xFF1B1B1B),
+            topLeft = Offset(size.width * 0.40f, barTop),
+            size = Size(size.width * 0.20f, barHeight),
+            style = Stroke(width = 2.dp.toPx()),
+        )
         val markerX = markerPosition * size.width
         drawLine(
             color = Color(0xFF1B1B1B),
@@ -2848,7 +3556,7 @@ private fun FeedScreen(
         onDispose { feedingSounds.release() }
     }
     var isFeeding by remember { mutableStateOf(false) }
-    var animationKey by remember { mutableStateOf(0) }
+    var animationKey by remember { mutableIntStateOf(0) }
     var selectedFood by remember { mutableStateOf(FoodType.HAM) }
     var showSyringeConfirmation by remember { mutableStateOf(false) }
     var showSyringeUsedNotice by remember { mutableStateOf(false) }
@@ -2883,9 +3591,7 @@ private fun FeedScreen(
             onDismissRequest = { showSyringeUsedNotice = false },
             title = { Text("Vollständig geheilt") },
             text = { Text("Die Gesundheit deines Löms wurde auf 100 % gesetzt. Die Spritze ist verbraucht.") },
-            confirmButton = {
-                Button(onClick = { showSyringeUsedNotice = false }) { Text("Okay") }
-            },
+            confirmButton = { Button(onClick = { showSyringeUsedNotice = false }) { Text("Okay") } },
         )
     }
 
@@ -2926,14 +3632,14 @@ private fun FeedScreen(
         ) {
             DraggableFood(FoodType.MELON, enabled = !isFeeding) { food ->
                 selectedFood = food
-                feedingSounds.play(food)
+                if (state.gameSoundsEnabled) feedingSounds.play(food)
                 isFeeding = true
                 animationKey += 1
                 onFeed(food)
             }
             DraggableFood(FoodType.HAM, enabled = !isFeeding) { food ->
                 selectedFood = food
-                feedingSounds.play(food)
+                if (state.gameSoundsEnabled) feedingSounds.play(food)
                 isFeeding = true
                 animationKey += 1
                 onFeed(food)
@@ -2956,23 +3662,20 @@ private fun FeedScreen(
         }
 
         if (isFeeding) {
-            LoemSprite(
-                presentation = LoemSpriteStateMachine.presentation(
-                    state = state,
-                    visualState = LoemSpriteStateMachine.feedingState(selectedFood),
-                    surface = SpriteSurface.FEEDING,
-                ),
-                color = state.color,
-                animationKey = animationKey,
-            )
+                LoemSprite(
+                    presentation = LoemSpriteStateMachine.presentation(
+                        state = state,
+                        visualState = LoemSpriteStateMachine.feedingState(selectedFood),
+                        surface = SpriteSurface.FEEDING,
+                    ),
+                    color = state.color,
+                    animationKey = animationKey,
+                )
         } else {
             IdleLoem(
                 state = state,
                 isHungry = state.vitals(nowMillis).hunger >= HUNGRY_EXPRESSION_THRESHOLD,
-                isTired = state.isSleeping(
-                    nowMillis,
-                    Calendar.getInstance().get(Calendar.HOUR_OF_DAY),
-                ),
+                isTired = state.isSleeping(nowMillis, Calendar.getInstance().get(Calendar.HOUR_OF_DAY)),
             )
         }
 
@@ -3156,6 +3859,7 @@ private fun ActionScreen(
 }
 
 @Composable
+@OptIn(ExperimentalMaterial3Api::class)
 private fun SettingsScreen(
     state: LoemGameState,
     nowMillis: Long,
@@ -3167,35 +3871,49 @@ private fun SettingsScreen(
     onDebugEvolution: (Int, EvolutionPath) -> Unit,
     onForcePoop: () -> Unit,
     onDebugForceSleep: (Boolean) -> Unit,
+    onDebugTriggerDeparture: () -> Unit,
     onThemeModeChange: (ThemeMode) -> Unit,
+    onGameSoundsChange: (Boolean) -> Unit,
     onNotificationSettingsChange: (Boolean, Boolean, Boolean, Boolean) -> Unit,
     onReset: () -> Unit,
 ) {
+    var debugAnimationsExpanded by rememberSaveable { mutableStateOf(false) }
+    var debugToolsExpanded by rememberSaveable { mutableStateOf(false) }
     Column(
         Modifier.fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(24.dp),
+            .padding(16.dp),
     ) {
-        Text("Optionen", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-        Spacer(Modifier.height(12.dp))
-        Text("Spielstand wird automatisch auf diesem Gerät gespeichert.")
-        Text("Lebenstimer: ${formatAge(state.ageHours(nowMillis))}")
+        Text("Dein Spielstand wird automatisch auf diesem Gerät gespeichert.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.height(16.dp))
         Text("Design", fontWeight = FontWeight.SemiBold)
         Spacer(Modifier.height(8.dp))
-        Row(
+        SingleChoiceSegmentedButtonRow(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            ThemeMode.entries.forEach { mode ->
-                Button(
+            ThemeMode.entries.forEachIndexed { index, mode ->
+                SegmentedButton(
+                    selected = state.themeMode == mode,
+                    shape = SegmentedButtonDefaults.itemShape(index, ThemeMode.entries.size),
                     onClick = { onThemeModeChange(mode) },
-                    modifier = Modifier.weight(1f),
                 ) {
-                    Text(if (state.themeMode == mode) "✓ ${mode.displayName}" else mode.displayName)
+                    Text(mode.displayName)
                 }
             }
         }
+
+        Spacer(Modifier.height(24.dp))
+        Text("Audio", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+        Text(
+            "Geräusche beim Füttern, Kämpfen und Saubermachen.",
+            color = MaterialTheme.colorScheme.secondary,
+        )
+        Spacer(Modifier.height(8.dp))
+        NotificationSettingRow(
+            label = "Spielgeräusche",
+            checked = state.gameSoundsEnabled,
+            onCheckedChange = onGameSoundsChange,
+        )
 
         Spacer(Modifier.height(24.dp))
         Text(
@@ -3233,7 +3951,7 @@ private fun SettingsScreen(
             },
         )
         NotificationSettingRow(
-            label = "Kacke",
+            label = "Saubermachen",
             checked = state.poopNotificationsEnabled,
             onCheckedChange = {
                 onNotificationSettingsChange(
@@ -3261,8 +3979,11 @@ private fun SettingsScreen(
             Spacer(Modifier.height(28.dp))
             HorizontalDivider()
             Spacer(Modifier.height(16.dp))
-            Text("Debug-Werkzeuge", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-            Text("Nur im Debug-Build sichtbar.", color = MaterialTheme.colorScheme.secondary)
+            TextButton(onClick = { debugToolsExpanded = !debugToolsExpanded }, modifier = Modifier.fillMaxWidth()) {
+                Text(if (debugToolsExpanded) "Debug-Werkzeuge ausblenden ▴" else "Debug-Werkzeuge ▾")
+            }
+        }
+        if (BuildConfig.DEBUG && debugToolsExpanded) {
             Spacer(Modifier.height(16.dp))
             Button(onClick = onAddHour, modifier = Modifier.fillMaxWidth()) { Text("Lebenstimer +1 Stunde") }
             Spacer(Modifier.height(8.dp))
@@ -3276,33 +3997,47 @@ private fun SettingsScreen(
                 Text(if (state.debugForceSleep) "✓ Schlaf erzwungen – beenden" else "Löm in Schlaf versetzen")
             }
             Spacer(Modifier.height(8.dp))
-            Text("Sprite-Vorschau wählen:", fontWeight = FontWeight.SemiBold)
-            Spacer(Modifier.height(8.dp))
             Button(
-                onClick = { onDebugSpritePreviewChange(null) },
+                onClick = { debugAnimationsExpanded = !debugAnimationsExpanded },
                 modifier = Modifier.fillMaxWidth(),
             ) {
+                val selection = selectedDebugSpritePreview?.displayName ?: "Gameplay automatisch"
                 Text(
-                    if (selectedDebugSpritePreview == null) {
-                        "✓ Gameplay automatisch"
+                    if (debugAnimationsExpanded) {
+                        "▾ Animationsvorschauen ausblenden · $selection"
                     } else {
-                        "Gameplay automatisch"
+                        "▸ Animationsvorschauen (${debugSpritePreviews.size}) · $selection"
                     },
                 )
             }
-            debugSpritePreviews.forEach { preview ->
+            if (debugAnimationsExpanded) {
                 Spacer(Modifier.height(8.dp))
                 Button(
-                    onClick = { onDebugSpritePreviewChange(preview) },
+                    onClick = { onDebugSpritePreviewChange(null) },
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Text(
-                        if (selectedDebugSpritePreview == preview) {
-                            "✓ ${preview.displayName}"
+                        if (selectedDebugSpritePreview == null) {
+                            "✓ Gameplay automatisch"
                         } else {
-                            preview.displayName
+                            "Gameplay automatisch"
                         },
                     )
+                }
+                debugSpritePreviews.forEach { preview ->
+                    Spacer(Modifier.height(8.dp))
+                    Button(
+                        onClick = { onDebugSpritePreviewChange(preview) },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(
+                            if (selectedDebugSpritePreview == preview) {
+                                "✓ ${preview.displayName}"
+                            } else {
+                                preview.displayName
+                            },
+                        )
+                    }
                 }
             }
             Spacer(Modifier.height(8.dp))
@@ -3346,6 +4081,14 @@ private fun SettingsScreen(
                 Text("Löm kacken lassen")
             }
             Spacer(Modifier.height(8.dp))
+            Button(
+                onClick = onDebugTriggerDeparture,
+                modifier = Modifier.fillMaxWidth(),
+                enabled = state.isHatched(nowMillis),
+            ) {
+                Text("Abschied und neue Generation auslösen")
+            }
+            Spacer(Modifier.height(8.dp))
             Button(onClick = onReset, modifier = Modifier.fillMaxWidth()) { Text("Spielstand zurücksetzen") }
         }
     }
@@ -3358,12 +4101,14 @@ private fun NotificationSettingRow(
     onCheckedChange: (Boolean) -> Unit,
 ) {
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
+            .toggleable(value = checked, role = Role.Switch, onValueChange = onCheckedChange)
+            .padding(vertical = 4.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(label)
-        Switch(checked = checked, onCheckedChange = onCheckedChange)
+        Text(label, Modifier.weight(1f))
+        Switch(checked = checked, onCheckedChange = null)
     }
 }
 
@@ -3376,10 +4121,18 @@ private fun formatWeight(grams: Int): String =
     String.format(java.util.Locale.GERMANY, "%.2f kg", grams / 1_000f)
 
 private fun formatAge(totalHours: Long): String {
-    if (totalHours < 24) return "$totalHours Stunden"
+    if (totalHours < 24) return "$totalHours ${if (totalHours == 1L) "Stunde" else "Stunden"}"
 
     val days = totalHours / 24
     val hours = totalHours % 24
     val dayLabel = if (days == 1L) "Tag" else "Tage"
-    return "$days $dayLabel, $hours Stunden"
+    return "$days $dayLabel, $hours ${if (hours == 1L) "Stunde" else "Stunden"}"
+}
+
+private fun formatFamilyDate(timestampMillis: Long): String {
+    if (timestampMillis <= 0L) return "Nicht aufgezeichnet"
+    return java.text.SimpleDateFormat(
+        "dd.MM.yyyy",
+        java.util.Locale.GERMANY,
+    ).format(java.util.Date(timestampMillis))
 }

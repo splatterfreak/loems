@@ -1,7 +1,13 @@
 # Loems project instructions
 
+Character battle sprites must never contain their own projectiles, fired beams, traveling energy balls, or outgoing shot trails. The battle renderer supplies all outgoing and incoming elemental projectiles separately through `BattleProjectileEffect`. Show attacks through character posture, limbs, mouth, and recoil only. Permanent body-attached portals and contained body glow may remain, but must not extend into a projectile. Audit every frame of attack and double-attack sheets for duplicate shots before integration.
+
 When creating, regenerating, repairing, or updating a Loems evolution graphic or evolution tree, read and follow `docs/evolution-graphic.md` completely before editing the visualization. Start from `docs/evolution-graphic-template.html` when the requested layout is the established Loems diagram. Always run `tools/embed_evolution_graphic_sprites.py` and perform the required rendered-image checks before delivery.
 
 Every fourth evolution tier (`evolution == 3`) must have both a male and a female visual variant. Both gender variants share identical evolution requirements, time windows, weight profiles, battle values, and gameplay behavior; only their names and sprite resources differ. New tier-4 forms are incomplete until idle, hungry, sleep, melon, ham, and all battle states exist for both genders and are wired into normal and debug selection.
 
 All production raster images in `app/src/main/res/` must use lossless WebP, preserving transparency whenever the source has an alpha channel. PNG may be used only as an intermediate generation or editing format and must be converted to pixel-identical lossless WebP before integration. Do not add byte-identical copies for logical animation states; wire those states to the shared bitmap resource until they receive genuinely distinct artwork.
+
+Every battle-capable Löm form must have dedicated victory and defeat animations. A form is incomplete until both outcome animations are wired into the real battle result flow and debug selection; idle, attack, hit, or another generic state must not substitute for either outcome. A purpose-built final double-hit or knockout sequence may also serve as defeat only when it visibly resolves into a defeated pose. Battle outcomes play once and then hold their final frame.
+
+Keep `docs/animation-inventory.md` as the canonical animation-coverage list. Whenever a Löm sprite asset or runtime sprite mapping is added, removed, replaced, or repurposed, update that inventory in the same change. Count only dedicated state artwork as present; idle or static fallbacks remain documented as missing.

@@ -1,0 +1,86 @@
+[
+  {
+    "file": "loem_gloom_wizard_poop_male_battle_attack_sheet.webp",
+    "qa_pass": true,
+    "crop_failures": [],
+    "lossless_exact": true,
+    "visual_approved": false
+  },
+  {
+    "file": "loem_gloom_wizard_poop_male_battle_hit_sheet.webp",
+    "qa_pass": true,
+    "crop_failures": [],
+    "lossless_exact": true,
+    "visual_approved": false
+  },
+  {
+    "file": "loem_gloom_wizard_poop_male_battle_double_attack_sheet.webp",
+    "qa_pass": true,
+    "crop_failures": [],
+    "lossless_exact": true,
+    "visual_approved": false
+  },
+  {
+    "file": "loem_gloom_wizard_poop_male_battle_double_hit_sheet.webp",
+    "qa_pass": true,
+    "crop_failures": [],
+    "lossless_exact": true,
+    "visual_approved": false
+  },
+  {
+    "file": "loem_gloom_wizard_poop_male_battle_victory_sheet.webp",
+    "qa_pass": true,
+    "crop_failures": [],
+    "lossless_exact": true,
+    "visual_approved": false
+  },
+  {
+    "file": "loem_gloom_wizard_poop_male_battle_defeat_sheet.webp",
+    "qa_pass": true,
+    "crop_failures": [],
+    "lossless_exact": true,
+    "visual_approved": false
+  },
+  {
+    "file": "loem_gloom_wizard_poop_female_battle_attack_sheet.webp",
+    "qa_pass": true,
+    "crop_failures": [],
+    "lossless_exact": true,
+    "visual_approved": false
+  },
+  {
+    "file": "loem_gloom_wizard_poop_female_battle_hit_sheet.webp",
+    "qa_pass": true,
+    "crop_failures": [],
+    "lossless_exact": true,
+    "visual_approved": false
+  },
+  {
+    "file": "loem_gloom_wizard_poop_female_battle_double_attack_sheet.webp",
+    "qa_pass": true,
+    "crop_failures": [],
+    "lossless_exact": true,
+    "visual_approved": false
+  },
+  {
+    "file": "loem_gloom_wizard_poop_female_battle_double_hit_sheet.webp",
+    "qa_pass": true,
+    "crop_failures": [],
+    "lossless_exact": true,
+    "visual_approved": false
+  },
+  {
+    "file": "loem_gloom_wizard_poop_female_battle_victory_sheet.webp",
+    "qa_pass": true,
+    "crop_failures": [],
+    "lossless_exact": true,
+    "visual_approved": false
+  },
+  {
+    "file": "loem_gloom_wizard_poop_female_battle_defeat_sheet.webp",
+    "qa_pass": true,
+    "crop_failures": [],
+    "lossless_exact": true,
+    "visual_approved": false
+  }
+]

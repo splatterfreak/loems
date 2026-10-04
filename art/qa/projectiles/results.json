@@ -1,0 +1,266 @@
+[
+  {
+    "file": "loem_ultra_cosmic_battle_attack_sheet.webp",
+    "crop": [
+      48,
+      96,
+      416,
+      368
+    ],
+    "qa_pass": true,
+    "crop_failures": []
+  },
+  {
+    "file": "loem_ultra_cosmic_battle_hit_sheet.webp",
+    "crop": [
+      48,
+      96,
+      416,
+      368
+    ],
+    "qa_pass": true,
+    "crop_failures": []
+  },
+  {
+    "file": "loem_ultra_cosmic_battle_double_attack_sheet.webp",
+    "crop": [
+      48,
+      96,
+      416,
+      368
+    ],
+    "qa_pass": true,
+    "crop_failures": []
+  },
+  {
+    "file": "loem_ultra_cosmic_battle_double_hit_sheet.webp",
+    "crop": [
+      48,
+      96,
+      416,
+      368
+    ],
+    "qa_pass": true,
+    "crop_failures": []
+  },
+  {
+    "file": "loem_ultra_cosmic_battle_victory_sheet.webp",
+    "crop": [
+      48,
+      96,
+      416,
+      368
+    ],
+    "qa_pass": true,
+    "crop_failures": []
+  },
+  {
+    "file": "loem_ultra_cosmic_battle_defeat_sheet.webp",
+    "crop": [
+      48,
+      96,
+      416,
+      368
+    ],
+    "qa_pass": true,
+    "crop_failures": []
+  },
+  {
+    "file": "loem_space_rift_archmage_poop_battle_attack_sheet.webp",
+    "crop": [
+      48,
+      48,
+      416,
+      416
+    ],
+    "qa_pass": true,
+    "crop_failures": []
+  },
+  {
+    "file": "loem_space_rift_archmage_poop_battle_hit_sheet.webp",
+    "crop": [
+      48,
+      48,
+      416,
+      416
+    ],
+    "qa_pass": true,
+    "crop_failures": []
+  },
+  {
+    "file": "loem_space_rift_archmage_poop_battle_double_attack_sheet.webp",
+    "crop": [
+      48,
+      48,
+      416,
+      416
+    ],
+    "qa_pass": true,
+    "crop_failures": []
+  },
+  {
+    "file": "loem_space_rift_archmage_poop_battle_double_hit_sheet.webp",
+    "crop": [
+      48,
+      48,
+      416,
+      416
+    ],
+    "qa_pass": true,
+    "crop_failures": []
+  },
+  {
+    "file": "loem_space_rift_archmage_poop_battle_victory_sheet.webp",
+    "crop": [
+      48,
+      48,
+      416,
+      416
+    ],
+    "qa_pass": true,
+    "crop_failures": []
+  },
+  {
+    "file": "loem_space_rift_archmage_poop_battle_defeat_sheet.webp",
+    "crop": [
+      48,
+      48,
+      416,
+      416
+    ],
+    "qa_pass": true,
+    "crop_failures": []
+  },
+  {
+    "file": "loem_space_rift_urtoad_battle_attack_sheet.webp",
+    "crop": [
+      48,
+      176,
+      416,
+      288
+    ],
+    "qa_pass": true,
+    "crop_failures": []
+  },
+  {
+    "file": "loem_space_rift_urtoad_battle_hit_sheet.webp",
+    "crop": [
+      48,
+      176,
+      416,
+      288
+    ],
+    "qa_pass": true,
+    "crop_failures": []
+  },
+  {
+    "file": "loem_space_rift_urtoad_battle_double_attack_sheet.webp",
+    "crop": [
+      48,
+      176,
+      416,
+      288
+    ],
+    "qa_pass": true,
+    "crop_failures": []
+  },
+  {
+    "file": "loem_space_rift_urtoad_battle_double_hit_sheet.webp",
+    "crop": [
+      48,
+      176,
+      416,
+      288
+    ],
+    "qa_pass": true,
+    "crop_failures": []
+  },
+  {
+    "file": "loem_space_rift_urtoad_battle_victory_sheet.webp",
+    "crop": [
+      48,
+      176,
+      416,
+      288
+    ],
+    "qa_pass": true,
+    "crop_failures": []
+  },
+  {
+    "file": "loem_space_rift_urtoad_battle_defeat_sheet.webp",
+    "crop": [
+      48,
+      176,
+      416,
+      288
+    ],
+    "qa_pass": true,
+    "crop_failures": []
+  },
+  {
+    "file": "loem_space_rift_world_serpent_battle_attack_sheet.webp",
+    "crop": [
+      48,
+      160,
+      416,
+      304
+    ],
+    "qa_pass": true,
+    "crop_failures": []
+  },
+  {
+    "file": "loem_space_rift_world_serpent_battle_hit_sheet.webp",
+    "crop": [
+      48,
+      160,
+      416,
+      304
+    ],
+    "qa_pass": true,
+    "crop_failures": []
+  },
+  {
+    "file": "loem_space_rift_world_serpent_battle_double_attack_sheet.webp",
+    "crop": [
+      48,
+      160,
+      416,
+      304
+    ],
+    "qa_pass": true,
+    "crop_failures": []
+  },
+  {
+    "file": "loem_space_rift_world_serpent_battle_double_hit_sheet.webp",
+    "crop": [
+      48,
+      160,
+      416,
+      304
+    ],
+    "qa_pass": true,
+    "crop_failures": []
+  },
+  {
+    "file": "loem_space_rift_world_serpent_battle_victory_sheet.webp",
+    "crop": [
+      48,
+      160,
+      416,
+      304
+    ],
+    "qa_pass": true,
+    "crop_failures": []
+  },
+  {
+    "file": "loem_space_rift_world_serpent_battle_defeat_sheet.webp",
+    "crop": [
+      48,
+      160,
+      416,
+      304
+    ],
+    "qa_pass": true,
+    "crop_failures": []
+  }
+]

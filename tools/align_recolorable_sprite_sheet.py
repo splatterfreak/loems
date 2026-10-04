@@ -88,6 +88,26 @@ def scale_around_anchor(image: Image.Image, scale: float, anchor_x: int, ground:
     return result
 
 
+def align_ground(image: Image.Image, ground: int) -> Image.Image:
+    """Re-lock the visible ground after resampling introduces fractional alpha pixels."""
+    bbox = visible_mask(image).getbbox()
+    if bbox is None:
+        raise ValueError("Frame has no visible pixels after scaling")
+    dy = ground - bbox[3]
+    if dy == 0:
+        return image
+    result = Image.new("RGBA", image.size)
+    result.alpha_composite(image, (0, dy))
+    return result
+
+
+def clear_hidden_rgb(image: Image.Image) -> Image.Image:
+    """Lossless WebP must not retain stale colors beneath fully transparent pixels."""
+    clean = Image.new("RGBA", image.size)
+    clean.alpha_composite(image)
+    return clean
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Align generated Loems frames by recolorable body center and ground."
@@ -133,14 +153,22 @@ def main() -> None:
         (CELL - args.padding - args.center_x) / maximum_right,
         (args.ground - args.padding) / maximum_top,
     )
-    frames = [scale_around_anchor(frame, scale, args.center_x, args.ground) for frame in frames]
+    frames = [
+        clear_hidden_rgb(
+            align_ground(
+                scale_around_anchor(frame, scale, args.center_x, args.ground),
+                args.ground,
+            )
+        )
+        for frame in frames
+    ]
 
     result = Image.new("RGBA", source.size)
     for index, frame in enumerate(frames):
         row, column = divmod(index, 3)
         result.alpha_composite(frame, (column * CELL, row * CELL))
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    result.save(args.output)
+    clear_hidden_rgb(result).save(args.output)
 
 
 if __name__ == "__main__":

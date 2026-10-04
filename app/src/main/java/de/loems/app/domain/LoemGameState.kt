@@ -8,9 +8,11 @@ const val MAJESTIC_EVOLUTION_MIN_AGE_HOURS = 5 * 24L
 const val MAJESTIC_EVOLUTION_WINDOW_HOURS = 2 * 24L
 const val ADULT_EVOLUTION_MIN_AGE_HOURS = 14 * 24L
 const val ADULT_EVOLUTION_WINDOW_HOURS = 2 * 24L
-const val ULTRA_EVOLUTION_MIN_AGE_HOURS = 30 * 24L
-const val ULTRA_EVOLUTION_WINDOW_HOURS = 5 * 24L
+const val ULTRA_EVOLUTION_MIN_AGE_HOURS = 25 * 24L
+const val ULTRA_EVOLUTION_WINDOW_HOURS = 2 * 24L
 const val ULTRA_EVOLUTION_MIN_BATTLE_LEVEL = 5
+const val DEPARTURE_MIN_AGE_HOURS = 31 * 24L
+const val DEPARTURE_WINDOW_HOURS = 2 * 24L
 const val INITIAL_WEIGHT_GRAMS = 5_000
 const val INITIAL_HUNGER = 15f
 const val HUNGER_PER_HOUR = 5f
@@ -70,6 +72,13 @@ enum class LoemGender(val displayName: String, val symbol: String) {
     FEMALE("Weiblich", "♀"),
 }
 
+enum class GenerationInheritance {
+    COLOR,
+    GENDER,
+    ELEMENT,
+    NONE,
+}
+
 enum class LoemElement(val displayName: String, val symbol: String) {
     FIRE("Feuer", "🔥"),
     WIND("Wind", "💨"),
@@ -86,16 +95,36 @@ data class PendingLoemBattle(
     val earnedBattleExperience: Int = 0,
 )
 
+data class LoemAncestor(
+    val generation: Int,
+    val name: String,
+    val color: LoemColor,
+    val gender: LoemGender,
+    val element: LoemElement,
+    val evolution: Int,
+    val evolutionPath: EvolutionPath,
+    val battleLevel: Int,
+    val battleWins: Int,
+    val battleLosses: Int,
+    val hatchedAtMillis: Long,
+    val departedAtMillis: Long,
+    val ageHoursAtDeparture: Long,
+)
+
 data class LoemGameState(
     val bornAtMillis: Long,
     val color: LoemColor = LoemColor.GRAY,
     val name: String = "Löm",
+    val nameConfirmed: Boolean = true,
     val gender: LoemGender = LoemGender.MALE,
     val element: LoemElement = LoemElement.EARTH,
     val bonusAgeHours: Long = 0,
     val evolution: Int = 0,
     val evolutionPath: EvolutionPath = EvolutionPath.UNDECIDED,
     val generation: Int = 1,
+    val familyTree: List<LoemAncestor> = emptyList(),
+    val ancestorGalleryUnlocked: Boolean = false,
+    val ancestorGalleryUnlockNoticePending: Boolean = false,
     val hasHealingSyringe: Boolean = false,
     val syringeAgeMilestonesProcessed: Int = 0,
     val meals: Int = 0,
@@ -108,6 +137,7 @@ data class LoemGameState(
     val battleWins: Int = 0,
     val battleLosses: Int = 0,
     val battleExperience: Int = 0,
+    val battleStartLevel: Int = 1,
     val battleLevelCap: Int = LoemBattle.BASE_MAX_BATTLE_LEVEL,
     val pendingBattle: PendingLoemBattle? = null,
     val happiness: Int = INITIAL_HAPPINESS,
@@ -125,6 +155,7 @@ data class LoemGameState(
     val poopSinceMillis: Long = 0L,
     val lightOff: Boolean = false,
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
+    val gameSoundsEnabled: Boolean = true,
     val sleepNotificationsEnabled: Boolean = false,
     val evolutionNotificationsEnabled: Boolean = false,
     val poopNotificationsEnabled: Boolean = false,
@@ -136,6 +167,8 @@ data class LoemGameState(
     val teddyHealingBonusPercent: Int = 0,
     val sleepHealingRemainderPercent: Int = 0,
     val debugForceSleep: Boolean = false,
+    val debugDepartureTriggered: Boolean = false,
+    val debugDepartureTriggeredAtMillis: Long = 0L,
     val poorConditionSinceMillis: Long = 0L,
     val lastPoorConditionPenaltyMillis: Long = 0L,
 ) {
@@ -640,6 +673,31 @@ object LoemColorLottery {
     }
 }
 
+object LoemLifecycle {
+    fun departureAgeHours(state: LoemGameState): Long {
+        val deterministicWindowOffset =
+            Math.floorMod(
+                state.bornAtMillis / HOUR_MILLIS + 83L,
+                DEPARTURE_WINDOW_HOURS + 1,
+            )
+        return DEPARTURE_MIN_AGE_HOURS + deterministicWindowOffset
+    }
+
+    fun hasDeparted(state: LoemGameState, nowMillis: Long): Boolean =
+        state.debugDepartureTriggered || state.debugDepartureTriggeredAtMillis > 0L ||
+            state.ageHours(nowMillis) >= departureAgeHours(state)
+
+    fun departureAtMillis(state: LoemGameState, observedAtMillis: Long): Long {
+        if (state.debugDepartureTriggeredAtMillis > 0L) {
+            return state.debugDepartureTriggeredAtMillis
+        }
+        if (state.debugDepartureTriggered) return observedAtMillis
+        val realHoursUntilDeparture =
+            (departureAgeHours(state) - state.bonusAgeHours).coerceAtLeast(0L)
+        return state.bornAtMillis + realHoursUntilDeparture * HOUR_MILLIS
+    }
+}
+
 object LoemEvolution {
     fun chooseFromCare(state: LoemGameState, nowMillis: Long, localHour: Int): EvolutionPath =
         if (state.careAverage(nowMillis, localHour) >= 1f) EvolutionPath.GOOD else EvolutionPath.BAD
@@ -732,28 +790,44 @@ object LoemEvolution {
     fun canBecomeUltra(state: LoemGameState, nowMillis: Long): Boolean =
         state.evolution == 3 &&
             state.evolutionPath == EvolutionPath.GOOD &&
-            LoemBattle.levelProgress(state.battleExperience, state.battleLevelCap).level >=
+            LoemBattle.levelProgress(
+                state.battleExperience,
+                state.battleLevelCap,
+                state.battleStartLevel,
+            ).level >=
             ULTRA_EVOLUTION_MIN_BATTLE_LEVEL &&
             state.ageHours(nowMillis) >= nextUltraEvolutionAgeHours(state)
 
     fun canBecomeSpaceRiftUrToad(state: LoemGameState, nowMillis: Long): Boolean =
         state.evolution == 3 &&
             state.evolutionPath == EvolutionPath.MUD_TOAD &&
-            LoemBattle.levelProgress(state.battleExperience, state.battleLevelCap).level >=
+            LoemBattle.levelProgress(
+                state.battleExperience,
+                state.battleLevelCap,
+                state.battleStartLevel,
+            ).level >=
             ULTRA_EVOLUTION_MIN_BATTLE_LEVEL &&
             state.ageHours(nowMillis) >= nextUltraEvolutionAgeHours(state)
 
     fun canBecomeSpaceRiftWorldSerpent(state: LoemGameState, nowMillis: Long): Boolean =
         state.evolution == 3 &&
             state.evolutionPath == EvolutionPath.SERPENT &&
-            LoemBattle.levelProgress(state.battleExperience, state.battleLevelCap).level >=
+            LoemBattle.levelProgress(
+                state.battleExperience,
+                state.battleLevelCap,
+                state.battleStartLevel,
+            ).level >=
             ULTRA_EVOLUTION_MIN_BATTLE_LEVEL &&
             state.ageHours(nowMillis) >= nextUltraEvolutionAgeHours(state)
 
     fun canBecomeSpaceRiftArchmagePoop(state: LoemGameState, nowMillis: Long): Boolean =
         state.evolution == 3 &&
             state.evolutionPath == EvolutionPath.BAD &&
-            LoemBattle.levelProgress(state.battleExperience, state.battleLevelCap).level >=
+            LoemBattle.levelProgress(
+                state.battleExperience,
+                state.battleLevelCap,
+                state.battleStartLevel,
+            ).level >=
             ULTRA_EVOLUTION_MIN_BATTLE_LEVEL &&
             state.ageHours(nowMillis) >= nextUltraEvolutionAgeHours(state)
 }

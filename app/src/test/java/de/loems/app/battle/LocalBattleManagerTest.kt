@@ -28,4 +28,11 @@ class LocalBattleManagerTest {
             ),
         )
     }
+
+    @Test
+    fun acceptanceOnlyConfirmsTheStillActiveOutgoingChallenge() {
+        assertTrue(isCurrentOutgoingChallenge("match-1", "match-1"))
+        assertFalse(isCurrentOutgoingChallenge("match-2", "match-1"))
+        assertFalse(isCurrentOutgoingChallenge(null, "match-1"))
+    }
 }

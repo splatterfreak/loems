@@ -1,0 +1,38 @@
+[
+  {
+    "file": "loem_bad_battle_attack_sheet.webp",
+    "qa_pass": true,
+    "crop_failures": [],
+    "lossless_exact": true
+  },
+  {
+    "file": "loem_bad_battle_hit_sheet.webp",
+    "qa_pass": true,
+    "crop_failures": [],
+    "lossless_exact": true
+  },
+  {
+    "file": "loem_bad_battle_double_attack_sheet.webp",
+    "qa_pass": true,
+    "crop_failures": [],
+    "lossless_exact": true
+  },
+  {
+    "file": "loem_bad_battle_double_hit_sheet.webp",
+    "qa_pass": true,
+    "crop_failures": [],
+    "lossless_exact": true
+  },
+  {
+    "file": "loem_bad_battle_victory_sheet.webp",
+    "qa_pass": true,
+    "crop_failures": [],
+    "lossless_exact": true
+  },
+  {
+    "file": "loem_bad_battle_defeat_sheet.webp",
+    "qa_pass": true,
+    "crop_failures": [],
+    "lossless_exact": true
+  }
+]
